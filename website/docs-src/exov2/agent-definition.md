@@ -507,20 +507,36 @@ to run your agents; moving existing agents and threads between providers require
 ## Planned additions
 
 - [ ] Flatten environment definitions: expose sandbox settings and network policy fields at the top level, removing the
-  `config` and `policy` wrappers from files and the API.
+  `config` and `policy` wrappers from files and the API. The parser still requires `EnvironmentDefinition.config`, and
+  networking lives under `config.policy`.
 - [ ] Configure adapters directly in agent frontmatter, resolve their vault credentials, and provision their workers; remove
-  the separate `--adapters-file` configuration.
+  the separate `--adapters-file` configuration. Frontmatter currently accepts adapter names, with deployments supplied by
+  the separate file; worker supervision already exists.
+- [ ] Default a Git resource's omitted `mount_path` to `/workspace/<repo name>`. `ResourceDefinition` still requires an
+  explicit mount path.
 - [ ] Accept resource `checkout` as a Git ref string (branch, tag, or commit), replacing the tagged branch/commit object.
-- [ ] Support tool declarations in agent frontmatter and inherit them during execution.
+  Tags also need support in checkout resolution.
+- [ ] Support tool declarations in agent frontmatter and inherit them during execution. `tools` currently accepts module
+  paths, and client tool declarations must be supplied as `frontend_tools` on each HTTP turn request.
 - [ ] Move TypeScript tool module registration and path resolution into environments, bind implementations by declared tool
-  name, and route calls without an environment implementation to the client.
-- [ ] Load environment tool implementations in the Codex, Claude Code, and Pi harnesses.
+  name, and route calls without an environment implementation to the client. Environments do not yet accept `tool_modules`;
+  the current registry registers modules' own definitions rather than binding implementations to agent declarations.
+- [ ] Load environment tool implementations in the Codex, Claude Code, and Pi harnesses. All three already expose runtime
+  and client tools, but do not load the configured TypeScript tool modules; that loader is currently used by the shared
+  Responses turn loop.
 - [ ] Support environment tool implementations in Python and other languages, alongside TypeScript.
 - [ ] Implement one partial agent definition `overrides` schema for threads and turns: persist thread overrides, apply turn
-  overrides temporarily, inherit omitted fields, replace supplied fields in full, and use `[]` to clear lists.
+  overrides temporarily, inherit omitted fields, replace supplied fields in full, and use `[]` to clear lists. Include
+  instructions, full model settings, MCP servers, tools, resources, and adapters, and refresh the affected runtime state.
+  Persisted harness/model selections and individual turn options already work; the shared `overrides` object and an API
+  for updating an existing thread's overrides do not.
+- [ ] Honor `model.max_output_tokens` in the bundled coding harnesses where supported, and reject unsupported settings.
+  It is parsed and passed to the runtime, but Codex, Claude Code, and Pi currently do not use it.
+- [ ] Implement safe unfinished-turn recovery for Claude Code and Pi. They can continue conversations across sessions, but
+  neither currently exports `resumeTurn` to recover an interrupted turn after a runtime restart. Codex already does.
 - [ ] Skills in agent definitions
 - [ ] Memory store
 - [ ] Support remote outbound connections, so that you can have a local environment that receives commands from a remote agent server
-- [ ] Scheduled deployments (eg CMA).
+- [ ] Scheduled managed-agent deployments (eg CMA).
 
 <!-- TODO: Reconcile planned additions with GitHub issues before publishing. -->

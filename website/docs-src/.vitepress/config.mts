@@ -97,7 +97,6 @@ export default defineConfig({
               { text: "Support agent tutorial", link: "/exov2/tutorial" },
             ],
           },
-          { text: "Architecture", link: "/exov2/architecture" },
         ],
       },
       { text: "Development", link: "/development/" },
