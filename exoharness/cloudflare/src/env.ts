@@ -24,7 +24,12 @@ export interface SandboxIdentity {
 export interface SandboxRequest {
   sandbox_id: string;
   scope: RawResourceScope;
-  spec: { image: string; default_workdir: string; policy: JsonObject };
+  spec: {
+    image: string;
+    default_workdir: string;
+    policy: JsonObject;
+    resources?: { vcpu_count: number; memory_mib: number };
+  };
   lifecycle: { idle_ttl: { secs: number; nanos: number } | null };
 }
 export type SandboxPolicy = Record<string, string>;

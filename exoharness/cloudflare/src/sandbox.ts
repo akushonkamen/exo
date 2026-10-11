@@ -1,6 +1,12 @@
 import { DurableObject, RpcTarget, RpcStub } from "cloudflare:workers";
 import type { SandboxProcessStartRequest } from "../../typescript/harness/index";
-import type { Env, ExecRequest, ExecResult, SandboxIdentity } from "./env";
+import type {
+  Env,
+  ExecRequest,
+  ExecResult,
+  SandboxIdentity,
+  SandboxRequest,
+} from "./env";
 
 const ca = "/etc/cloudflare/certs/cloudflare-containers-ca.crt";
 const idleTimeoutMs = 300_000;
@@ -154,9 +160,28 @@ export class ExoSandbox extends DurableObject<Env> {
     environment: Record<string, string>,
     snapshot: { id: string } | null,
     idleMs: number,
+    resources: SandboxRequest["spec"]["resources"],
   ): Promise<string> {
     const container = this.ctx.container;
     if (!container) throw new Error("native sandbox binding missing");
+    // Exo resource shapes require at least one whole vCPU, so smaller types cannot fit.
+    // https://developers.cloudflare.com/containers/platform/limits/
+    const instance = resources
+      ? (
+          [
+            ["standard-2", 1, 6144],
+            ["standard-3", 2, 8192],
+            ["standard-4", 4, 12288],
+          ] as const
+        ).find(
+          ([, cpu, memory]) =>
+            cpu >= resources.vcpu_count && memory >= resources.memory_mib,
+        )?.[0]
+      : null;
+    if (resources && !instance)
+      throw new Error(
+        `Cloudflare cannot satisfy sandbox resources: ${resources.vcpu_count} vCPUs, ${resources.memory_mib} MiB; maximum is 4 vCPUs and 12288 MiB (standard-4)`,
+      );
     const name = image || managedImage;
     const reference = name === managedImage ? name : container.images[name];
     if (!reference)
@@ -173,6 +198,7 @@ export class ExoSandbox extends DurableObject<Env> {
       await this.ctx.storage.put("cwd", cwd);
       await this.ctx.storage.put("environment", environment);
       await this.ctx.storage.put("image", reference);
+      await this.ctx.storage.put("instance", instance ?? null);
       await this.readyContainer(identity);
       return name;
     } finally {
@@ -257,7 +283,12 @@ export class ExoSandbox extends DurableObject<Env> {
       const options = {
         entrypoint: ["sleep", "infinity"],
         enableInternet: false,
-        instance: this.env.SANDBOX_INSTANCE ?? "lite",
+        instance:
+          (await this.ctx.storage.get<
+            ContainerStartupOptions["instance"] | null
+          >("instance")) ??
+          this.env.SANDBOX_INSTANCE ??
+          "lite",
       };
       container.start(
         snapshot

@@ -111,9 +111,8 @@ impl CloudflareBackend {
         ensure!(
             request.spec.mounts.is_empty()
                 && request.spec.durable_file_systems.is_empty()
-                && request.spec.tcp_ports.is_empty()
-                && request.spec.resources.is_none(),
-            "Cloudflare sandbox mounts, durable filesystems, TCP ports and resource overrides are not supported"
+                && request.spec.tcp_ports.is_empty(),
+            "Cloudflare sandbox mounts, durable filesystems and TCP ports are not supported"
         );
         ensure!(
             request.lifecycle.idle_ttl.is_some_and(|ttl| !ttl.is_zero()),

@@ -180,7 +180,9 @@ node exoharness/cloudflare/scripts/live-contract-test.mjs
 
 The agent tests create test agents and threads, exercise model/tool execution and sandbox restoration, and stop their sandboxes in `finally` blocks. They retain the remote agent history, snapshots and artifacts for inspection and print results to stdout. The contract runner executes the shared Rust ExoHarness core contracts against `/exo/request`.
 
-Set the Worker variable `SANDBOX_INSTANCE` to a [Cloudflare instance type](https://developers.cloudflare.com/containers/platform/limits/) or a custom `{ "vcpu": 1, "memoryMib": 3072, "diskMb": 20000 }` object to size its sandboxes. The default is `lite`; `standard-2` provides 1 vCPU, 6 GiB RAM and 12 GB disk. Large repositories need enough space for both their working tree and Git database. Sizing takes effect when a sandbox starts.
+An Exo environment's `config.resources` selects the smallest [Cloudflare instance type](https://developers.cloudflare.com/containers/platform/limits/) that meets both `vcpu_count` and `memory_mib`, allowing overprovisioning. For example, 1 vCPU and 4096 MiB selects `standard-2`; 2 vCPUs and 4096 MiB selects `standard-3`. Requests above 4 vCPUs or 12288 MiB fail explicitly. The selected type supplies its standard disk capacity and is retained across sandbox restarts.
+
+When an environment omits `config.resources`, the Worker variable `SANDBOX_INSTANCE` supplies the default: a named instance type or a custom `{ "vcpu": 1, "memoryMib": 3072, "diskMb": 20000 }` object. With neither configured, the default is `lite`. Large repositories need enough space for both their working tree and Git database.
 
 ## Git resources and MCP
 

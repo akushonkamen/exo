@@ -293,6 +293,7 @@ export class RuntimeIO {
           command.snapshot,
           request.lifecycle.idle_ttl!.secs * 1000 +
             request.lifecycle.idle_ttl!.nanos / 1e6,
+          request.spec.resources,
         );
       }
       case "info":

@@ -29,7 +29,7 @@ const identity = { agentId: "agent", threadId: "thread", sandboxId: "sandbox" };
 const codexImage = `registry.cloudflare.com/test/exo-codex-devbox@sha256:${"a".repeat(64)}`;
 const codexName = "codex-aaaaaaaa";
 
-function fixture() {
+function fixture(instance) {
   const data = new Map();
   const calls = [];
   let alarm = null;
@@ -98,6 +98,7 @@ function fixture() {
   };
   const env = {
     ACCOUNT_ID: "account",
+    SANDBOX_INSTANCE: instance,
     PROVIDERS: {
       getByName: () => ({
         sandboxPolicy: async () => ({ MODEL_TOKEN: "placeholder" }),
@@ -245,4 +246,69 @@ test("a command timeout kills the process and preserves the warm container", asy
   assert(f.calls.includes("kill:9"));
   assert(!f.calls.includes("destroy"));
   assert(f.container.running);
+});
+
+test("environment resources select the smallest sufficient instance and survive idle restart", async () => {
+  for (const [cpu, memory, instance] of [
+    [1, 1024, "standard-2"],
+    [1, 6144, "standard-2"],
+    [1, 6145, "standard-3"],
+    [2, 4096, "standard-3"],
+    [2, 8192, "standard-3"],
+    [1, 8193, "standard-4"],
+    [3, 1024, "standard-4"],
+    [4, 12288, "standard-4"],
+  ]) {
+    const f = fixture("lite");
+    await f.sandbox.acquire(identity, "", "/workspace", {}, null, 300_000, {
+      vcpu_count: cpu,
+      memory_mib: memory,
+    });
+    await f.sandbox.stop();
+    await f.sandbox.beginActivity(identity, "restart");
+    assert.deepEqual(
+      f.calls
+        .filter((call) => call[0] === "start")
+        .map((call) => call[1].instance),
+      [instance, instance],
+    );
+  }
+  const f = fixture("standard-4");
+  await f.sandbox.acquire(identity, "", "/workspace", {}, null, 300_000, {
+    vcpu_count: 1,
+    memory_mib: 1024,
+  });
+  assert.equal(
+    f.calls.find((call) => call[0] === "start")[1].instance,
+    "standard-2",
+  );
+  const defaults = fixture("standard-3");
+  await defaults.sandbox.acquire(identity, "", "/workspace", {}, null, 300_000);
+  assert.equal(
+    defaults.calls.find((call) => call[0] === "start")[1].instance,
+    "standard-3",
+  );
+});
+
+test("unserviceable environment resources fail before starting or saving a sandbox", async () => {
+  for (const resources of [
+    { vcpu_count: 5, memory_mib: 1024 },
+    { vcpu_count: 1, memory_mib: 12289 },
+  ]) {
+    const f = fixture("standard-4");
+    await assert.rejects(
+      f.sandbox.acquire(
+        identity,
+        "",
+        "/workspace",
+        {},
+        null,
+        300_000,
+        resources,
+      ),
+      /Cloudflare cannot satisfy sandbox resources/,
+    );
+    assert.equal(f.calls.length, 0);
+    assert.equal(await f.storage.get("image"), undefined);
+  }
 });

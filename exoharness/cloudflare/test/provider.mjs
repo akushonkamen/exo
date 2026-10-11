@@ -74,7 +74,7 @@ export class FakeSandbox extends DurableObject {
   async endActivity(id) { this.activities.delete(id); }
   async activityCount() { return this.activities.size; }
   async info() { return {exists: !!await this.ctx.storage.get("identity"), running: await this.ctx.storage.get("running") ?? false}; }
-  async acquire(identity, image, cwd, environment) { image ||= "cloudflare/debian-trixie"; await this.ctx.storage.put("identity", identity); await this.ctx.storage.put("image", image); await this.ctx.storage.put("environment", environment); await this.ctx.storage.put("running", true); return image; }
+  async acquire(identity, image, cwd, environment, snapshot, idleMs, resources) { await this.ctx.storage.put("resources", resources ?? null); image ||= "cloudflare/debian-trixie"; await this.ctx.storage.put("identity", identity); await this.ctx.storage.put("image", image); await this.ctx.storage.put("environment", environment); await this.ctx.storage.put("running", true); return image; }
   async terminate() { await this.stop(); await this.ctx.storage.deleteAll(); }
   async exec(identity, request) {
     const count = (await this.ctx.storage.get("count") ?? 0) + 1;
@@ -83,6 +83,7 @@ export class FakeSandbox extends DurableObject {
   }
   async count() { return await this.ctx.storage.get("count") ?? 0; }
   async environment() { return await this.ctx.storage.get("environment"); }
+  async resources() { return JSON.stringify(await this.ctx.storage.get("resources")); }
   async startProcess(request) {
     if (request.command[0] === "cat") return new EchoProcess();
     if (!request.command.join(" ").includes("codex")) {
@@ -1117,6 +1118,7 @@ test("sandbox process RPC preserves binary stdin, drains output and cancels proc
     scope,
     request: {
       name: "io-test",
+      resources: { vcpu_count: 2, memory_mib: 4096 },
       provider: "cloudflare",
       image: "",
       default_workdir: "/workspace",
@@ -1135,6 +1137,11 @@ test("sandbox process RPC preserves binary stdin, drains output and cancels proc
       })
     ).process.id;
   const process_id = await start();
+  const sandbox = await sandboxFor(agent, thread);
+  assert.deepEqual(JSON.parse(await sandbox.resources()), {
+    vcpu_count: 2,
+    memory_mib: 4096,
+  });
   const followed = rpc({
     type: "get_sandbox_process_events",
     scope,
