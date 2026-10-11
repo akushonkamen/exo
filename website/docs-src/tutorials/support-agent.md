@@ -55,7 +55,7 @@ settings with an [environment](../agent-definition#environments).
 Now, run the agent:
 
 ```bash
-exo agent run --agent-file support-analyst.md
+exo run support-analyst.md
 ```
 
 Paste in an example case, like:
@@ -96,7 +96,7 @@ If it does:
 Use GitHub's public API to read issues.
 ```
 
-Run `exo agent run --agent-file support-analyst.md` again, then try the same prompt:
+Run `exo run support-analyst.md` again, then try the same prompt:
 
 ```text
 Check out https://github.com/braintrustdata/autoevals/issues/223

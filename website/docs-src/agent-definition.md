@@ -165,8 +165,7 @@ adapters:
     allowed_channels: [C123456]
 ```
 
-`bot_token` and `signing_secret` are vault references. Adapters do not run with `exo agent run ...` but they do when
-you run `exo serve ...`.
+`bot_token` and `signing_secret` are vault references. Adapters run in `--serve` mode.
 
 ## Saved agents
 
@@ -174,11 +173,11 @@ Save a definition, then run it by its slug:
 
 ```bash
 exo agent create support-analyst --file support-analyst.md
-exo agent run --agent support-analyst
+exo run support-analyst
 ```
 
 The creation argument supplies the display name, and Exo derives its slug from that name. You can set a different slug with
-`--slug`. With `--agent-file`, the filename supplies the display name, and the generated slug includes an eight-character path hash.
+`--slug`. When running a file, the filename supplies the display name, and the generated slug includes an eight-character path hash.
 Save the agent explicitly as above when you want to refer to it by a predictable slug.
 
 Without `--prompt`, this opens a REPL. With `--prompt`, it runs a single turn. You can update the saved definition or inspect it:
@@ -188,8 +187,17 @@ exo agent update support-analyst --file support-analyst.md
 exo agent get support-analyst
 ```
 
-`exo agent run --agent-file support-analyst.md` syncs the definition from the file before opening a thread. This is convenient
+`exo run support-analyst.md` syncs the definition from the file before opening a thread. This is convenient
 while editing the definition, and is what we use in the tutorial.
+
+The argument can be a Markdown file or a saved agent's name or ID. Exo treats `.md` names and paths like `./agent` as files;
+other names refer to saved agents. Add `--serve` to serve the agent over HTTP instead of opening terminal chat:
+
+```bash
+exo run support-analyst.md --serve
+# Or use a saved agent:
+exo run support-analyst --serve
+```
 
 The local provider stores its state under `~/.exo` by default. Use `--root` to select another directory, and point the CLI and
 server at the same root to share their local state.
@@ -200,9 +208,9 @@ A thread has an id, slug (which must be unique), and display name. When you run 
 these fields. If you specify a slug, it will either create a new thread with that slug name or resume the existing one.
 
 ```bash
-exo agent run --agent support-analyst
+exo run support-analyst
 exo thread list support-analyst
-exo agent run --agent support-analyst --thread THREAD
+exo run support-analyst --thread THREAD
 ```
 
 Each time you connect, you interact through a session. Each submitted input starts a turn, which can include multiple model
@@ -251,7 +259,7 @@ you resume; turn overrides apply only to that turn. For example, a thread could 
 The CLI lets you override the harness and model when opening or resuming a thread:
 
 ```bash
-exo agent run --agent support-analyst --thread THREAD \
+exo run support-analyst --thread THREAD \
   --harness pi --model gpt-6.1-sol
 ```
 
@@ -308,10 +316,10 @@ TCP ports allowed by the host policy.
 Like agents, environments can be used directly from a file, or saved by name.
 
 ```bash
-exo agent run --agent support-analyst --environment-file environment.yaml
+exo run support-analyst --environment-file environment.yaml
 
 exo environment create support-analyst-env --file environment.yaml
-exo agent run --agent support-analyst --environment support-analyst-env
+exo run support-analyst --environment support-analyst-env
 ```
 
 An environment can also set `provider`, `default_workdir`, `file_system_mounts`, and `tool_modules` for
@@ -364,7 +372,7 @@ model:
 Vaults are selected independently of the agent definition, so the same agent can use different users' credentials:
 
 ```bash
-exo agent run --agent support-analyst --vault personal
+exo run support-analyst --vault personal
 ```
 
 See [Vaults](architecture/vaults) for creating credentials, OAuth, per-user vaults,
@@ -377,7 +385,7 @@ selection precedence, and destination policies.
 With `support-analyst` [saved above](#saved-agents), serve the local provider:
 
 ```bash
-exo serve --bind 127.0.0.1:8080
+exo run --serve --bind 127.0.0.1:8080
 ```
 
 The HTTP API is available under `/exo`. In another terminal, get the saved agent's ID using `jq`:
@@ -422,7 +430,7 @@ curl -fsS -X POST "http://127.0.0.1:8080/exo/agent/$AGENT_ID/thread/$THREAD_ID/t
 ```
 
 When binding to a non-loopback address, configure authentication with `--auth-file`. You can also serve a single agent with
-`exo serve --agent support-analyst`.
+`exo run support-analyst --serve`.
 
 ### Handling client tool calls
 

@@ -191,9 +191,7 @@ async fn cli_reports_http_usage_across_restarts_and_paginated_history() -> Resul
         &[
             "--provider",
             "oss",
-            "agent",
             "run",
-            "--agent",
             &agent_id,
             "--thread",
             &thread_id,
@@ -259,9 +257,7 @@ async fn cli_reports_http_usage_across_restarts_and_paginated_history() -> Resul
             &[
                 "--provider",
                 "oss",
-                "agent",
                 "run",
-                "--agent",
                 &agent_id,
                 "--thread",
                 &thread_id,

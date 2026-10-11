@@ -8,7 +8,7 @@ Run from the Exo repo using the local provider:
 exo vault create personal
 exo vault secret create personal notion \
   --url https://mcp.notion.com/mcp
-exo agent run --agent-file exoharness/examples/managed-agents/notion-analyst.md \
+exo run exoharness/examples/managed-agents/notion-analyst.md \
   --vault personal
 ```
 
@@ -75,7 +75,7 @@ Save an agent with a Git resource so every new thread starts with its own checko
 
 ```sh
 exo agent create exo-dev --file exoharness/examples/managed-agents/exo-developer.md
-exo agent run --agent exo-dev
+exo run exo-dev
 ```
 
 The shared Git checkout is refreshed before each new thread and its volume is

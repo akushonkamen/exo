@@ -442,7 +442,7 @@ fn build_exo_config(cli: &Cli, state_root: &Path) -> Result<BasicExoHarnessConfi
 #[cfg(feature = "firecracker")]
 fn command_firecracker_args(command: &Commands) -> Option<&FirecrackerArgs> {
     match command {
-        Commands::Serve { args, .. } => Some(&args.firecracker),
+        Commands::Run { service, .. } => Some(&service.firecracker),
         _ => None,
     }
 }
@@ -501,7 +501,7 @@ impl Cli {
         match &self.command {
             Commands::Environment { runtime, .. }
             | Commands::Vault { runtime, .. }
-            | Commands::Serve { runtime, .. }
+            | Commands::Run { runtime, .. }
             | Commands::Agent { runtime, .. }
             | Commands::Conversation { runtime, .. }
             | Commands::Sandbox { runtime, .. } => runtime,
@@ -521,15 +521,11 @@ impl Cli {
 
     fn execution(&self) -> Option<&ExecutionArgs> {
         match &self.command {
-            Commands::Agent {
-                command: AgentCommands::Run { execution, .. },
-                ..
-            }
+            Commands::Run { execution, .. }
             | Commands::Conversation {
                 command: ConversationCommands::Send { execution, .. },
                 ..
             } => Some(execution),
-            Commands::Serve { args, .. } => Some(&args.execution),
             _ => None,
         }
     }
@@ -560,14 +556,27 @@ enum Commands {
     },
     #[command(hide = true)]
     FirecrackerBridge,
-    /// Serve agents and vaults over HTTP.
-    Serve {
+    /// Run an agent in the terminal, or serve it over HTTP with --serve.
+    Run {
         #[command(flatten)]
         runtime: RuntimeArgs,
         #[command(flatten)]
-        args: Box<serve::ServeArgs>,
+        execution: ExecutionArgs,
+        #[command(flatten)]
+        thread: Box<managed_agents::ThreadArgs>,
+        /// Execute one prompt and exit.
+        #[arg(long, conflicts_with_all = ["tui", "serve"])]
+        prompt: Option<String>,
+        /// Use the full-screen TUI.
+        #[arg(long, conflicts_with = "serve")]
+        tui: bool,
+        /// Serve the HTTP API and supervise adapters instead of opening terminal chat.
+        #[arg(long)]
+        serve: bool,
+        #[command(flatten, next_help_heading = "Server options")]
+        service: Box<serve::ServeArgs>,
     },
-    /// Create and run agents from Markdown specs.
+    /// Manage saved agents and their Markdown specs.
     Agent {
         #[command(flatten)]
         runtime: RuntimeArgs,
@@ -605,18 +614,6 @@ enum AgentCommands {
         agent: String,
         #[arg(long)]
         file: PathBuf,
-    },
-    /// Run interactively, or execute one prompt with --prompt.
-    Run {
-        #[command(flatten)]
-        execution: ExecutionArgs,
-        #[command(flatten)]
-        thread: Box<managed_agents::ThreadArgs>,
-        #[arg(long, conflicts_with = "tui")]
-        prompt: Option<String>,
-        /// Use the full-screen TUI.
-        #[arg(long)]
-        tui: bool,
     },
     Mount {
         #[command(subcommand)]
@@ -941,16 +938,10 @@ impl std::fmt::Debug for CliError {
 async fn main() -> Result<(), CliError> {
     let cli = Cli::parse();
     let verbose = matches!(&cli.command,
-        Commands::Agent { command: AgentCommands::Run { thread, .. }, .. }
+        Commands::Run { thread, .. }
         if thread.verbosity == Verbosity::Full
     );
-    if matches!(
-        &cli.command,
-        Commands::Agent {
-            command: AgentCommands::Run { .. },
-            ..
-        }
-    ) {
+    if matches!(&cli.command, Commands::Run { serve: false, .. }) {
         turn_display::init_progress(verbose).map_err(|error| CliError { error, verbose })?;
     }
     run(cli).await.map_err(|error| CliError { error, verbose })
@@ -977,7 +968,7 @@ async fn run(mut cli: Cli) -> Result<()> {
     if let Commands::Provider { command } = &cli.command {
         return providers::run(command.as_ref(), &mut provider_store).await;
     }
-    let serving = matches!(cli.command, Commands::Serve { .. });
+    let serving = matches!(cli.command, Commands::Run { serve: true, .. });
     let (agent, thread) = command_refs_mut(&mut cli.command);
     let selected_provider = if serving && cli.provider_profile.is_none() {
         None
@@ -1078,10 +1069,7 @@ async fn run_selected(
     if !local
         && matches!(
             &cli.command,
-            Commands::Agent {
-                command: AgentCommands::Run { execution, .. },
-                ..
-            } if execution.egress_policy.is_some()
+            Commands::Run { execution, .. } if execution.egress_policy.is_some()
         )
     {
         bail!("--egress-policy is local-only; put the policy in the remote environment definition");
@@ -1106,7 +1094,15 @@ async fn run_selected(
             unreachable!("management commands return before harness startup")
         }
         Commands::Vault { command, .. } => vaults::run(harness.exoharness_handle().as_ref(), &command, &env_vars, local).await?,
-        Commands::Agent { command: AgentCommands::Run { thread, tui, prompt, execution, .. }, .. } => {
+        Commands::Run { thread, serve: true, service, .. } => {
+            let agent = if thread.agent.is_some() {
+                Some(managed_agents::open_agent(harness.as_ref(), definition.as_ref(), &thread).await?.record().id)
+            } else {
+                None
+            };
+            serve::run(harness.clone(), state_root.as_deref().context("server requires local state")?, *service, agent).await?;
+        }
+        Commands::Run { thread, tui, prompt, execution, .. } => {
             let (agent, conversation) = managed_agents::open_thread(
                 harness.as_ref(),
                 definition.as_ref(),
@@ -1149,11 +1145,7 @@ async fn run_selected(
                 run_chat_repl(Arc::clone(&harness), agent, conversation, thread.verbosity).await?;
             }
         }
-        Commands::Serve { args, .. } => {
-            serve::run(harness.clone(), state_root.as_deref().context("server requires local state")?, *args).await?;
-        }
         Commands::Agent { command, .. } => match command {
-            AgentCommands::Run { .. } => unreachable!(),
             AgentCommands::List => {
                 let agents = harness.list_agents().await?;
                 print_table(
@@ -1912,6 +1904,13 @@ async fn run_selected(
 
 fn command_refs_mut(command: &mut Commands) -> (Option<&mut String>, Option<&mut String>) {
     match command {
+        Commands::Run { thread, .. } => {
+            let file = thread.agent_file().is_some();
+            (
+                if file { None } else { thread.agent.as_mut() },
+                thread.thread.as_mut(),
+            )
+        }
         Commands::Agent { command, .. } => match command {
             AgentCommands::Update { agent, .. }
             | AgentCommands::Get { agent }
@@ -1921,7 +1920,6 @@ fn command_refs_mut(command: &mut Commands) -> (Option<&mut String>, Option<&mut
                 | AgentMountCommands::Create { agent, .. }
                 | AgentMountCommands::Delete { agent, .. } => (Some(agent), None),
             },
-            AgentCommands::Run { thread, .. } => (thread.agent.as_mut(), thread.thread.as_mut()),
             AgentCommands::List | AgentCommands::Create { .. } => (None, None),
         },
         Commands::Conversation { command, .. } => match command {
@@ -2004,7 +2002,6 @@ fn command_refs_mut(command: &mut Commands) -> (Option<&mut String>, Option<&mut
         | Commands::Provider { .. }
         | Commands::Environment { .. }
         | Commands::Vault { .. } => (None, None),
-        Commands::Serve { args, .. } => (args.agent.as_mut(), None),
     }
 }
 
@@ -2261,7 +2258,7 @@ async fn run_sandbox_shell_command(
 }
 
 fn chat_command(agent_slug: &str, conversation_slug: &str) -> String {
-    format!("exo agent run --agent {agent_slug} --thread {conversation_slug}")
+    format!("exo run {agent_slug} --thread {conversation_slug}")
 }
 
 fn sandbox_scope_name(scope: SandboxScope) -> &'static str {
@@ -2372,6 +2369,7 @@ mod command_tests {
         for command in [
             "chat",
             "run",
+            "serve",
             "secret",
             "model",
             "sandbox-provider",
@@ -2384,7 +2382,9 @@ mod command_tests {
         for args in [
             vec!["agent", "create", "support", "--file", "agent.md"],
             vec!["agent", "update", "support", "--file", "agent.md"],
-            vec!["serve", "--agent", "support"],
+            vec!["run", "--serve", "support"],
+            vec!["run", "--serve"],
+            vec!["run", "agent.md", "--serve"],
             vec!["environment", "provider", "list"],
             vec!["sandbox", "run", "support", "thread", "pwd"],
         ] {
@@ -2408,12 +2408,13 @@ mod command_tests {
             vec![
                 "vault", "secret", "update", "team", "github", "--scope", "repo",
             ],
-            vec!["agent", "serve", "support"],
+            vec!["agent", "run", "support"],
             vec!["agent", "create", "support", "--model", "test"],
             vec!["agent", "--exoharness-url", "http://localhost", "list"],
-            vec![
-                "agent", "run", "--agent", "support", "--tui", "--prompt", "hi",
-            ],
+            vec!["run", "support", "--tui", "--prompt", "hi"],
+            vec!["run", "support", "--serve", "--prompt", "hi"],
+            vec!["run", "support", "--serve", "--thread", "saved"],
+            vec!["run", "support", "--bind", "127.0.0.1:8080"],
         ] {
             assert!(Cli::try_parse_from(["exo"].into_iter().chain(args)).is_err());
         }
@@ -2468,9 +2469,9 @@ mod command_tests {
             assert!(help.contains("--env-file"), "{help}");
         }
         for command in [
-            vec!["agent", "run", "--agent", "test"],
+            vec!["run", "test"],
             vec!["thread", "send", "test", "thread", "hi"],
-            vec!["serve"],
+            vec!["run", "--serve"],
         ] {
             let cli = Cli::try_parse_from(["exo"].into_iter().chain(command).chain([
                 "--pricing-path",
@@ -2492,9 +2493,7 @@ mod command_tests {
         for prompt in [None, Some("hello")] {
             let mut args = vec![
                 "exo",
-                "agent",
                 "run",
-                "--agent",
                 "support",
                 "--thread",
                 "saved",
@@ -2506,15 +2505,35 @@ mod command_tests {
             }
             let cli = Cli::try_parse_from(args).unwrap();
             assert!(matches!(cli.command,
-                Commands::Agent { command: AgentCommands::Run { thread, prompt: actual, .. }, .. }
+                Commands::Run { thread, prompt: actual, .. }
                 if thread.agent.as_deref() == Some("support") && thread.thread.as_deref() == Some("saved")
                     && actual.as_deref() == prompt
             ));
         }
         assert_eq!(
             chat_command("support", "saved"),
-            "exo agent run --agent support --thread saved"
+            "exo run support --thread saved"
         );
+        for (reference, file) in [
+            ("support", false),
+            ("support.md", true),
+            ("./support", true),
+            ("agents/support.md", true),
+            ("/tmp/support", true),
+        ] {
+            let mut cli =
+                Cli::try_parse_from(["exo", "run", reference, "--thread", "saved"]).unwrap();
+            let (agent, thread) = command_refs_mut(&mut cli.command);
+            assert_eq!(
+                agent.as_deref().map(String::as_str),
+                (!file).then_some(reference)
+            );
+            assert_eq!(thread.as_deref().map(String::as_str), Some("saved"));
+            let Commands::Run { thread, .. } = &cli.command else {
+                unreachable!()
+            };
+            assert_eq!(thread.agent_file().is_some(), file);
+        }
     }
 
     #[cfg(unix)]

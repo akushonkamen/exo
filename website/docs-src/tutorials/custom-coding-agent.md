@@ -243,7 +243,7 @@ config:
   policy:
     networking: {type: unrestricted}
 EOF
-exo agent run --agent coder --thread coder-build --environment-file coding-environment.yaml
+exo run coder --thread coder-build --environment-file coding-environment.yaml
 ```
 
 For custom harnesses, the default sandbox image is `ubuntu:24.04`, which is bare — no Python,

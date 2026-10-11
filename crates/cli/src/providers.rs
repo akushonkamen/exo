@@ -21,16 +21,13 @@ pub(crate) async fn runtime(
     env: &crate::env::CliEnvironment,
     state_root: Option<&Path>,
 ) -> Result<std::sync::Arc<executor::Runtime>> {
-    use crate::{AgentCommands, Commands, HarnessSelection, managed_agents};
+    use crate::{Commands, HarnessSelection, managed_agents};
     use executor::managed_agents::LocalAgentSetup;
     use exoharness::BasicExoHarness;
     use std::sync::Arc;
 
     let thread = match &cli.command {
-        Commands::Agent {
-            command: AgentCommands::Run { thread, .. },
-            ..
-        } => Some(thread),
+        Commands::Run { thread, .. } => Some(thread),
         _ => None,
     };
     let model = thread.and_then(|args| args.model.clone());
@@ -121,14 +118,9 @@ pub(crate) fn validate_http_command(command: &crate::Commands) -> Result<()> {
         } => {
             bail!("environment providers must be configured on the runtime host")
         }
-        Commands::Agent {
-            command: AgentCommands::Run { tui: true, .. },
-            ..
-        } => bail!("HTTP providers support inline chat; omit --tui"),
-        Commands::Agent {
-            command: AgentCommands::Run { thread, .. },
-            ..
-        } => thread.validate_remote(),
+        Commands::Run { serve: true, .. } => bail!("--serve requires a local provider"),
+        Commands::Run { tui: true, .. } => bail!("HTTP providers support inline chat; omit --tui"),
+        Commands::Run { thread, .. } => thread.validate_remote(),
         Commands::Conversation {
             command:
                 ConversationCommands::Update {

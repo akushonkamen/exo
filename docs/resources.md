@@ -21,8 +21,8 @@ resources:
 
 ```sh
 exo agent create exo-dev --file agent.md
-exo agent run --agent exo-dev
-exo agent run --agent exo-dev --thread THREAD
+exo run exo-dev
+exo run exo-dev --thread THREAD
 ```
 
 Resource paths are absolute inside the sandbox. With resources, the default
@@ -59,7 +59,7 @@ select a vault containing that secret:
 ```sh
 exo vault secret create personal github --allow-origin https://github.com \
   --token-env GITHUB_TOKEN
-exo agent run --agent exo-dev --vault personal
+exo run exo-dev --vault personal
 ```
 
 The credential must target the Git server's HTTPS origin. If you created the

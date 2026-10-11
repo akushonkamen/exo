@@ -54,7 +54,7 @@ exo vault secret create global --preset openai
 Now, you're ready to run your agent:
 
 ```bash
-exo agent run --agent-file support-analyst.md \
+exo run support-analyst.md \
     --prompt "Triage: CSV uploads return HTTP 500 after 30 seconds"
 ```
 

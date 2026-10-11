@@ -175,18 +175,16 @@ async fn vault_credentials_stay_host_side_and_typescript_preserves_oauth_refresh
         (true, 2, 3),
     ] {
         revision.store(version, Ordering::SeqCst);
-        let mut cmd = command("agent");
-        cmd.arg("run");
+        let mut cmd = command("run");
         if saved {
             cmd.arg("--env-file").arg(&env_file);
         }
-        cmd.arg(if saved { "--agent" } else { "--agent-file" })
-            .arg(if saved {
-                "saved"
-            } else {
-                definition.to_str().unwrap()
-            })
-            .args(["--prompt", "test"]);
+        cmd.arg(if saved {
+            "saved"
+        } else {
+            definition.to_str().unwrap()
+        })
+        .args(["--prompt", "test"]);
         if saved {
             cmd.args(["--thread", "history"]);
         }

@@ -44,11 +44,9 @@ async fn http_runtime_does_not_initialize_local_state_or_resolve_remote_harnesse
     let root = temp.path().join("local-state");
     let cli = crate::Cli::try_parse_from([
         "exo",
-        "agent",
         "run",
         "--root",
         root.to_str().unwrap(),
-        "--agent-file",
         "remote-agent.md",
         "--prompt",
         "hello",
@@ -72,17 +70,9 @@ async fn http_runtime_does_not_initialize_local_state_or_resolve_remote_harnesse
 #[test]
 fn http_commands_reject_local_execution_options() -> Result<()> {
     for args in [
-        vec!["exo", "agent", "run", "--agent", "support", "--tui"],
-        vec![
-            "exo",
-            "agent",
-            "run",
-            "--agent",
-            "support",
-            "--sandbox",
-            "local-process",
-        ],
-        vec!["exo", "serve", "--agent", "support"],
+        vec!["exo", "run", "support", "--tui"],
+        vec!["exo", "run", "support", "--sandbox", "local-process"],
+        vec!["exo", "run", "--serve", "support"],
         vec![
             "exo", "thread", "update", "support", "thread", "--vault", "personal", "--model",
             "other",

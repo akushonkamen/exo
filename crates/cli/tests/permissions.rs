@@ -88,9 +88,7 @@ async fn local_and_http_cli_prompt_before_executing_and_continue_after_denial() 
                 .mount(&f.model)
                 .await;
             let mut args = vec![
-                "agent",
                 "run",
-                "--agent-file",
                 f.agent_file.to_str().unwrap(),
                 "--prompt",
                 "Use the requested tool",
@@ -158,9 +156,7 @@ async fn unsupported_native_approvals_fail_before_model_execution() -> Result<()
             let output = f
                 .output(
                     &[
-                        "agent",
                         "run",
-                        "--agent-file",
                         f.agent_file.to_str().unwrap(),
                         "--prompt",
                         "Use tools",
@@ -224,9 +220,7 @@ async fn renamed_and_undeclared_harnesses_validate_approval_support() -> Result<
                 let output = f
                     .output(
                         &[
-                            "agent",
                             "run",
-                            "--agent-file",
                             f.agent_file.to_str().unwrap(),
                             "--prompt",
                             "Use tools",
@@ -292,9 +286,7 @@ async fn unknown_tool_policies_fail_before_model_execution() -> Result<()> {
             let output = f
                 .output(
                     &[
-                        "agent",
                         "run",
-                        "--agent-file",
                         f.agent_file.to_str().unwrap(),
                         "--prompt",
                         "Use tools",

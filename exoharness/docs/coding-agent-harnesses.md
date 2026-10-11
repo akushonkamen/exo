@@ -80,7 +80,7 @@ EOF
 
 ./target/debug/exo thread create ts-codex
 ./target/debug/exo thread mount create ts-codex <conversation> "$PWD" /workspace --rw
-./target/debug/exo agent run --agent ts-codex --thread <conversation>
+./target/debug/exo run ts-codex --thread <conversation>
 ```
 
 ## Claude Code
@@ -116,7 +116,7 @@ EOF
 
 ./target/debug/exo thread create ts-claude-code
 ./target/debug/exo thread mount create ts-claude-code <conversation> "$PWD" /workspace --rw
-./target/debug/exo agent run --agent ts-claude-code --thread <conversation>
+./target/debug/exo run ts-claude-code --thread <conversation>
 ```
 
 ## Cursor
@@ -153,7 +153,7 @@ EOF
 
 ./target/debug/exo thread create ts-cursor
 ./target/debug/exo thread mount create ts-cursor <conversation> "$PWD" /workspace --rw
-./target/debug/exo agent run --agent ts-cursor --thread <conversation>
+./target/debug/exo run ts-cursor --thread <conversation>
 ```
 
 ## Pi
@@ -192,7 +192,7 @@ EOF
 
 ./target/debug/exo thread create ts-pi
 ./target/debug/exo thread mount create ts-pi <conversation> "$PWD" /workspace --rw
-./target/debug/exo agent run --agent ts-pi --thread <conversation>
+./target/debug/exo run ts-pi --thread <conversation>
 ```
 
 An agent model of `provider/model` selects a provider explicitly; a bare name

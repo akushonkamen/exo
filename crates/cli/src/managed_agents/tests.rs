@@ -133,7 +133,6 @@ fn thread_args(agent: &str) -> ThreadArgs {
     ThreadArgs {
         environment: None,
         environment_file: None,
-        agent_file: None,
         agent: Some(agent.to_string()),
         thread: None,
         model: None,
@@ -245,15 +244,17 @@ async fn file_runs_reuse_saved_agents_and_mounts_stay_on_threads() -> Result<()>
     std::fs::write(&path, SOURCE)?;
     let definition = AgentDefinition::load(&path)?;
     let mut args = thread_args("unused");
-    args.agent = None;
-    args.agent_file = Some(path);
+    args.agent = Some(path.to_string_lossy().into_owned());
     args.mounts.push(
         crate::parse_sandbox_mount(&format!("{}:/workspace/tickets:ro", temp.path().display()))
             .unwrap(),
     );
+    let synced = super::open_agent(runtime.as_ref(), Some(&definition), &args).await?;
+    assert!(managed::list_threads(synced.as_ref()).await?.is_empty());
     let (first, thread) =
         open_configured_thread(runtime.as_ref(), Some(&definition), &args).await?;
     assert_eq!(first.record().name, "agent");
+    assert_eq!(first.record().id, synced.record().id);
     let (second, second_thread) =
         open_configured_thread(runtime.as_ref(), Some(&definition), &args).await?;
     assert_eq!(first.record().id, second.record().id);
@@ -311,8 +312,7 @@ async fn model_names_pass_through_without_registration_or_substitution() -> Resu
     std::fs::write(&path, SOURCE.replace("gpt-5.4", "gpt-6.1-sol"))?;
     let definition = AgentDefinition::load(&path)?;
     let mut args = thread_args("unused");
-    args.agent = None;
-    args.agent_file = Some(path);
+    args.agent = Some(path.to_string_lossy().into_owned());
     let (agent, thread) =
         open_configured_thread(runtime.as_ref(), Some(&definition), &args).await?;
     assert_eq!(
@@ -334,7 +334,6 @@ async fn model_names_pass_through_without_registration_or_substitution() -> Resu
         "another-model"
     );
     args.model = None;
-    args.agent_file = None;
     args.agent = Some(agent.record().id.to_string());
     let (_, saved) = open_configured_thread(runtime.as_ref(), None, &args).await?;
     assert!(

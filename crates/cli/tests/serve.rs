@@ -17,7 +17,7 @@ async fn serve_exposes_the_shared_client_api_and_isolates_the_selected_agent() -
     let selected = exo_managed_agents::find_agent(state.as_ref(), "served").await?;
     let other = exo_managed_agents::find_agent(state.as_ref(), "other").await?;
     let mut child = f
-        .command(&["serve", "--agent", "served", "--bind", "127.0.0.1:0"])
+        .command(&["run", "--serve", "served", "--bind", "127.0.0.1:0"])
         .stdout(Stdio::piped())
         .stderr(Stdio::inherit())
         .spawn()?;
@@ -87,9 +87,7 @@ async fn serve_exposes_the_shared_client_api_and_isolates_the_selected_agent() -
             &[
                 "--provider",
                 "served-http",
-                "agent",
                 "run",
-                "--agent",
                 "served",
                 "--prompt",
                 "Hello over HTTP",
@@ -106,9 +104,7 @@ async fn serve_exposes_the_shared_client_api_and_isolates_the_selected_agent() -
             &[
                 "--provider",
                 "served-http",
-                "agent",
                 "run",
-                "--agent",
                 "served",
                 "--thread",
                 slug,
@@ -129,7 +125,7 @@ async fn serve_exposes_the_shared_client_api_and_isolates_the_selected_agent() -
 async fn serve_rejects_non_loopback_bind_addresses() -> Result<()> {
     let f = Fixture::new().await?;
     let output = f
-        .output(&["serve", "--bind", "0.0.0.0:0"], None, None)
+        .output(&["run", "--serve", "--bind", "0.0.0.0:0"], None, None)
         .await?;
     ensure!(!output.status.success());
     ensure!(

@@ -276,18 +276,12 @@
     <main>
       <p class="filename">jq-triage.md</p>
       <pre><span class="l"><span class="d">---</span></span><span class="l"><span class="k">harness:</span> <span class="swap" data-values="codex claude-code pi">codex</span></span><span class="l"><span class="k">model:</span></span><span class="l">  <span class="k">name:</span> <span class="swap" data-values="gpt-6.1-sol opus-5.5 zai-org/GLM-5.3-Flash">gpt-6.1-sol</span></span><span class="l">  <span class="k">credential:</span> <span class="swap" data-values="openai anthropic baseten">openai</span></span><span class="l"><span class="k">resources:</span></span><span class="l">  - <span class="k">name:</span> jq</span><span class="l">    <span class="k">type:</span> git</span><span class="l">    <span class="k">url:</span> https://github.com/jqlang/jq</span><span class="l"><span class="d">---</span></span><span class="l"> </span><span class="l">Given a bug report against jq, reproduce it</span><span class="l">from source, explain what you found, and</span><span class="l">propose a fix.</span></pre>
-      <p class="run">
-        <span class="d">$ </span>exo agent run --agent-file jq-triage.md
-      </p>
+      <p class="run"><span class="d">$ </span>exo run jq-triage.md</p>
       <div class="about">
         <p>
-          This file is a complete agent. Exo gives each thread its own sandbox
-          and copy of the repo, with durable history, scoped credentials, and
-          network controls, from your terminal or behind an HTTP API.
-        </p>
-        <p>
-          Use Codex, Claude Code, Pi, or your own harness. Exo is open source
-          and runs wherever you do.
+          Exo is a minimal, open source runtime for agents. Run the harness of
+          your choice with sandboxes, durable history, and secure access to your
+          code, tools, models, and integrations.
         </p>
         <p class="links">
           <a href="/docs/">Read the docs</a> or start with the

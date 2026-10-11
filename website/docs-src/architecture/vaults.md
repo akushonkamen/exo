@@ -83,8 +83,8 @@ exo vault secret create bob --preset github --token-env BOB_GITHUB_PAT
 After [saving an agent](../agent-definition#saved-agents) as `support-analyst`, select the user's vault when creating their thread:
 
 ```bash
-exo agent run --agent support-analyst --vault alice
-exo agent run --agent support-analyst --vault bob
+exo run support-analyst --vault alice
+exo run support-analyst --vault bob
 ```
 
 Both vaults contain a secret named `github`, so the agent definition stays the same. Each thread uses its selected vault's

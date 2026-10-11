@@ -146,7 +146,7 @@ async fn pi_managed_local_and_http() -> Result<()> {
             std::fs::write(&environment, "name: pi\nconfig:\n  provider: apple_container\n  image: exo-pi-sandbox:latest\n  default_workdir: /home/exo/workspace\n  resources: {vcpu_count: 2, memory_mib: 2048}\n  policy:\n    networking: {type: unrestricted}\n  idle_seconds: 600\n")?;
             f.cli(&["environment", "create", "pi", "--file", environment.to_str().unwrap()]).await?;
             f.cli(&["agent", "create", "pi-live", "--file", f.agent_file.to_str().unwrap()]).await?;
-            let first = live(f, &["agent", "run", "--agent", "pi-live", "--environment", "pi", "--prompt", "Call the verifier fetch_code tool. Use the native bash tool to write exactly its returned code to proof.txt in your working directory. Report the code and working directory."], &"a\n".repeat(20)).await?;
+            let first = live(f, &["run", "pi-live", "--environment", "pi", "--prompt", "Call the verifier fetch_code tool. Use the native bash tool to write exactly its returned code to proof.txt in your working directory. Report the code and working directory."], &"a\n".repeat(20)).await?;
             ensure!(first.contains("/home/exo/workspace"), "environment working directory was ignored");
             ensure!(first.contains("PI-READY") && first.contains("exo-pi-verified-47"), "instructions or MCP result missing");
             ensure!(first.contains("Permission required: pi.bash") && first.contains("Permission required: exo_mcp__verifier__fetch_code"), "native/MCP approvals missing");
@@ -156,15 +156,15 @@ async fn pi_managed_local_and_http() -> Result<()> {
             let thread = exo_managed_agents::find_thread(agent.as_ref(), slug).await?;
             let sandbox = thread.list_sandboxes().await?[0].id.clone();
             check_resources(&sandbox).await?;
-            let resumed = live(f, &["agent", "run", "--agent", "pi-live", "--thread", slug, "--prompt", "Use native read to inspect proof.txt again, then report its contents. Do not rewrite it."], &"y\n".repeat(20)).await?;
+            let resumed = live(f, &["run", "pi-live", "--thread", slug, "--prompt", "Use native read to inspect proof.txt again, then report its contents. Do not rewrite it."], &"y\n".repeat(20)).await?;
             ensure!(resumed.contains("exo-pi-verified-47") && resumed.contains("Permission required: pi.read"), "saved file/approval missing");
             ensure!(thread.list_sandboxes().await?[0].id == sandbox, "resuming replaced the sandbox");
-            let denied = live(f, &["agent", "run", "--agent", "pi-live", "--thread", slug, "--prompt", "Use bash to write denied.txt. If denied, stop and report that."], &"n\n".repeat(20)).await?;
+            let denied = live(f, &["run", "pi-live", "--thread", slug, "--prompt", "Use bash to write denied.txt. If denied, stop and report that."], &"n\n".repeat(20)).await?;
             ensure!(denied.contains("Permission required:"), "denial was not requested");
             ensure!(denied.contains("← pi.bash ✗ error"), "denied tool was displayed as successful");
             let output = thread.run_in_sandbox(exoharness::RunInSandboxRequest { id: sandbox.clone(), command: vec!["sh".into(), "-c".into(), "test ! -e denied.txt && test \"$(cat proof.txt)\" = exo-pi-verified-47".into()], env: Default::default() }).await?;
             ensure!(output.into_parts().wait.await? == 0, "denied tool ran or saved file disappeared");
-            let mut child = f.command(&["agent", "run", "--agent", "pi-live", "--thread", slug, "--prompt", "Run this exact native bash command: touch cancel.started; sleep 113; touch cancel.finished. Wait for it to finish."])
+            let mut child = f.command(&["run", "pi-live", "--thread", slug, "--prompt", "Run this exact native bash command: touch cancel.started; sleep 113; touch cancel.finished. Wait for it to finish."])
                 .stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn()?;
             child.stdin.take().context("stdin")?.write_all("y\n".repeat(20).as_bytes()).await?;
             tokio::time::timeout(Duration::from_secs(90), async {
@@ -177,16 +177,16 @@ async fn pi_managed_local_and_http() -> Result<()> {
             let output = tokio::time::timeout(Duration::from_secs(30), child.wait_with_output()).await??;
             ensure!(!output.status.success() && String::from_utf8_lossy(&output.stderr).contains("turn interrupted"), "Pi did not cancel: {}", String::from_utf8_lossy(&output.stderr));
             ensure!(shell(thread.as_ref(), &sandbox, "test ! -e cancel.finished && ! pgrep -f '^sleep 113$'").await? == 0, "cancelled tool kept running");
-            let followup = live(f, &["agent", "run", "--agent", "pi-live", "--thread", slug, "--prompt", "The previous turn was cancelled. Use native read to inspect proof.txt and report its code."], &"y\n".repeat(20)).await?;
+            let followup = live(f, &["run", "pi-live", "--thread", slug, "--prompt", "The previous turn was cancelled. Use native read to inspect proof.txt and report its code."], &"y\n".repeat(20)).await?;
             ensure!(followup.contains("exo-pi-verified-47"), "follow-up after cancellation failed");
             f.cli(&["agent", "create", "second", "--file", f.agent_file.to_str().unwrap()]).await?;
-            let independent = live(f, &["agent", "run", "--agent", "second", "--environment", "pi", "--prompt", "Use bash to check whether proof.txt exists. Do not create it. Report the result."], &"y\n".repeat(20)).await?;
+            let independent = live(f, &["run", "second", "--environment", "pi", "--prompt", "Use bash to check whether proof.txt exists. Do not create it. Report the result."], &"y\n".repeat(20)).await?;
             let second_agent = exo_managed_agents::find_agent(f.runtime.exoharness_handle().as_ref(), "second").await?;
             let second_thread = exo_managed_agents::find_thread(second_agent.as_ref(), thread_slug(&independent)?).await?;
             let output = second_thread.run_in_sandbox(exoharness::RunInSandboxRequest { id: second_thread.list_sandboxes().await?[0].id.clone(), command: vec!["sh".into(), "-c".into(), "test ! -e proof.txt".into()], env: Default::default() }).await?;
             ensure!(output.into_parts().wait.await? == 0, "different agents shared an implicit sandbox");
-            live(f, &["agent", "run", "--agent-file", f.agent_file.to_str().unwrap(), "--environment", "pi", "--prompt", "Reply exactly PI-READY without using tools."], "").await?;
-            let history = live(f, &["agent", "run", "--agent", "pi-live", "--thread", slug], "/history\n/quit\n").await?;
+            live(f, &["run", f.agent_file.to_str().unwrap(), "--environment", "pi", "--prompt", "Reply exactly PI-READY without using tools."], "").await?;
+            let history = live(f, &["run", "pi-live", "--thread", slug], "/history\n/quit\n").await?;
             ensure!(history.contains("exo-pi-verified-47"), "history missing");
             Ok::<_, anyhow::Error>(())
     }).await
@@ -212,7 +212,7 @@ async fn container_environments_local_and_http() -> Result<()> {
                         "file_system_mounts": [{"host_path": shared, "mount_path":"/shared","mode":"rw"}]
                     }
                 }))?)?;
-                let output = live(f, &["agent", "run", "--agent", agent_name, "--environment-file", file.to_str().unwrap(), "--prompt", "Reply without using tools."], "").await?;
+                let output = live(f, &["run", agent_name, "--environment-file", file.to_str().unwrap(), "--prompt", "Reply without using tools."], "").await?;
                 let agent = exo_managed_agents::find_agent(f.runtime.exoharness_handle().as_ref(), agent_name).await?;
                 let thread = exo_managed_agents::find_thread(agent.as_ref(), thread_slug(&output)?).await?;
                 let id = thread.list_sandboxes().await?[0].id.clone();
@@ -226,7 +226,7 @@ async fn container_environments_local_and_http() -> Result<()> {
                     ensure!(std::fs::read_to_string(shared.join("shared-proof"))? == "shared", "mount not visible to host");
                 }
                 ensure!(shell(thread.as_ref(), &id, "! curl -s --connect-timeout 2 --max-time 3 https://1.1.1.1").await? == 0, "disabled network allowed external access");
-                live(f, &["agent", "run", "--agent", agent_name, "--thread", thread_slug(&output)?, "--prompt", "Resume without tools."], "").await?;
+                live(f, &["run", agent_name, "--thread", thread_slug(&output)?, "--prompt", "Resume without tools."], "").await?;
                 ensure!(thread.list_sandboxes().await?[0].id == id, "resume replaced the sandbox");
                 ensure!(shell(thread.as_ref(), &id, "test -e /home/exo/private-proof").await? == 0, "resume lost sandbox files");
             }
@@ -386,12 +386,12 @@ for (const dir of ['/tmp/exo-codex-home', '/home/exo/.codex', '/home/exo/.claude
                     let environment = f.temp.path().join("environment.yaml");
                     std::fs::write(&environment, format!("name: credential-test\nconfig:\n  provider: {backend}\n  image: {image}\n  default_workdir: /home/exo/workspace\n  resources: {{vcpu_count: 2, memory_mib: 2048}}\n  policy:\n    networking: {network}\n  idle_seconds: 600\n"))?;
                     f.cli(&["agent", "create", "credential-test", "--file", f.agent_file.to_str().context("agent path")?]).await?;
-                    let first = live(f, &["agent", "run", "--agent", "credential-test", "--environment-file", environment.to_str().context("environment path")?, "--prompt", "Reply exactly CREDENTIAL-PROXY-READY without using tools."], "").await?;
+                    let first = live(f, &["run", "credential-test", "--environment-file", environment.to_str().context("environment path")?, "--prompt", "Reply exactly CREDENTIAL-PROXY-READY without using tools."], "").await?;
                     ensure!(first.contains("CREDENTIAL-PROXY-READY"), "agent response missing");
                     ensure!(!first.contains("Reconnecting..."), "agent retried an unsupported transport");
                     ensure!(!first.contains("tokens: unavailable"), "agent usage missing");
                     let slug = thread_slug(&first)?;
-                    let resumed = live(f, &["agent", "run", "--agent", "credential-test", "--thread", slug, "--prompt", "Repeat your previous response exactly. Do not use tools."], "").await?;
+                    let resumed = live(f, &["run", "credential-test", "--thread", slug, "--prompt", "Repeat your previous response exactly. Do not use tools."], "").await?;
                     ensure!(resumed.contains("CREDENTIAL-PROXY-READY"), "saved thread did not resume");
                     let agent = exo_managed_agents::find_agent(f.runtime.exoharness_handle().as_ref(), "credential-test").await?;
                     let thread = exo_managed_agents::find_thread(agent.as_ref(), slug).await?;
@@ -450,7 +450,7 @@ async fn native_mcp_workflow(
             } else {
                 "Call wiki read_wiki_structure for repoName openai/openai-python once, then report the first section title. Do not use shell, web search, or any other tools."
             };
-            let first = live(f, &["agent", "run", "--agent", "native-mcp", "--environment-file", environment.to_str().context("environment path")?, "--prompt", prompt], &"y\n".repeat(20)).await?;
+            let first = live(f, &["run", "native-mcp", "--environment-file", environment.to_str().context("environment path")?, "--prompt", prompt], &"y\n".repeat(20)).await?;
             ensure!(first.contains("Permission required: exo_mcp__wiki__read_wiki_structure"), "native MCP bypassed Harness approval");
             ensure!(first.contains("← exo_mcp__wiki__read_wiki_structure ✓"), "native MCP did not succeed");
             if harness == "codex" {
@@ -458,7 +458,7 @@ async fn native_mcp_workflow(
                 ensure!(first.matches("Permission required: exo_mcp__wiki__read_wiki_structure").count() == 2, "each parallel MCP call must request approval");
             }
             let slug = thread_slug(&first)?;
-            let denied = live(f, &["agent", "run", "--agent", "native-mcp", "--thread", slug, "--prompt", prompt], &"n\n".repeat(20)).await?;
+            let denied = live(f, &["run", "native-mcp", "--thread", slug, "--prompt", prompt], &"n\n".repeat(20)).await?;
             ensure!(denied.contains("Permission required: exo_mcp__wiki__read_wiki_structure"), "resumed native MCP bypassed approval");
             ensure!(denied.contains("← exo_mcp__wiki__read_wiki_structure ✗"), "denied native MCP was reported as successful");
             Ok::<_, anyhow::Error>(())
@@ -491,18 +491,18 @@ async fn filesystem_resources_local_and_http() -> Result<()> {
         std::fs::write(&environment, "name: coder\nconfig:\n  provider: apple_container\n  image: exo-codex-sandbox:latest\n  enable_networking: true\n")?;
         let environment = environment.to_str().unwrap();
         f.cli(&["agent", "create", "coder", "--file", f.agent_file.to_str().unwrap()]).await?;
-        let first = live(f, &["agent", "run", "--agent", "coder", "--environment-file", environment, "--prompt", "Reply without using tools."], "").await?;
+        let first = live(f, &["run", "coder", "--environment-file", environment, "--prompt", "Reply without using tools."], "").await?;
         let agent = exo_managed_agents::find_agent(f.runtime.exoharness_handle().as_ref(), "coder").await?;
         let thread = exo_managed_agents::find_thread(agent.as_ref(), thread_slug(&first)?).await?;
         let sandbox = thread.list_sandboxes().await?[0].id.clone();
         ensure!(shell(thread.as_ref(), &sandbox, "test \"$(pwd)\" = /workspace && test \"$(cat README)\" = original && ! touch /fixtures/forbidden && git status --porcelain && echo private > README").await? == 0, "cwd or resource mounts incorrect");
         ensure!(std::fs::read_to_string(source.join("README"))? == "original", "thread modified its source");
-        let second = live(f, &["agent", "run", "--agent", "coder", "--environment-file", environment, "--prompt", "Reply without using tools."], "").await?;
+        let second = live(f, &["run", "coder", "--environment-file", environment, "--prompt", "Reply without using tools."], "").await?;
         let second_thread = exo_managed_agents::find_thread(agent.as_ref(), thread_slug(&second)?).await?;
         let second_sandbox = second_thread.list_sandboxes().await?[0].id.clone();
         ensure!(shell(second_thread.as_ref(), &second_sandbox, "test \"$(cat README)\" = original").await? == 0, "threads shared changes");
         std::fs::write(environment, "name: coder\nconfig:\n  provider: apple_container\n  image: exo-codex-sandbox:latest\n  enable_networking: true\n  idle_seconds: 900\n")?;
-        live(f, &["agent", "run", "--agent", "coder", "--thread", thread_slug(&first)?, "--environment-file", environment, "--prompt", "Reply without using tools."], "").await?;
+        live(f, &["run", "coder", "--thread", thread_slug(&first)?, "--environment-file", environment, "--prompt", "Reply without using tools."], "").await?;
         let sandbox = thread.list_sandboxes().await?.into_iter().find(|s| s.running).context("resumed sandbox")?.id;
         ensure!(shell(thread.as_ref(), &sandbox, "test \"$(cat README)\" = private").await? == 0, "resource edits were lost after sandbox replacement");
         let agent_config = executor::load_agent_config(agent.as_ref()).await?;
@@ -511,7 +511,7 @@ async fn filesystem_resources_local_and_http() -> Result<()> {
         let path = std::path::PathBuf::from(&thread_config.resource_mounts[0].host_path);
         f.cli(&["thread", "delete", "coder", thread_slug(&first)?]).await?;
         ensure!(!path.exists(), "deleted thread leaked a mounted volume");
-        live(f, &["agent", "run", "--agent-file", f.agent_file.to_str().unwrap(), "--environment-file", environment, "--prompt", "Reply without using tools."], "").await?;
+        live(f, &["run", f.agent_file.to_str().unwrap(), "--environment-file", environment, "--prompt", "Reply without using tools."], "").await?;
         Ok(())
     }).await
 }

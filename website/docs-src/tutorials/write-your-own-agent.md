@@ -216,7 +216,7 @@ Help the user with their task.
 EOF
 exo agent create sysmon --file sysmon.md
 exo thread create sysmon "Sysmon Test"
-exo agent run --agent sysmon --thread sysmon-test
+exo run sysmon --thread sysmon-test
 ```
 
 A real exchange (via `thread send`):

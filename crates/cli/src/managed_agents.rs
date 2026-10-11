@@ -33,38 +33,43 @@ fn validate_new_thread_slug(slug: &str) -> Result<()> {
 
 #[derive(Debug, Args)]
 pub struct ThreadArgs {
-    /// Sync a saved agent from a Markdown file and start or resume a saved thread.
-    #[arg(long, required_unless_present = "agent", conflicts_with = "agent")]
-    pub agent_file: Option<PathBuf>,
-    #[arg(long, required_unless_present = "agent_file")]
+    /// Agent Markdown file, or a saved agent's name or ID. Omit with --serve to serve all agents.
+    #[arg(value_name = "AGENT", required_unless_present = "serve")]
     pub agent: Option<String>,
     /// Start a named thread, or resume it by slug or id if it already exists.
-    #[arg(long)]
+    #[arg(long, conflicts_with = "serve")]
     pub thread: Option<String>,
     /// Override the model name for this thread.
     #[arg(long)]
     pub model: Option<String>,
     /// Attach a vault to the thread, including when resuming an existing thread.
-    #[arg(long)]
+    #[arg(long, conflicts_with = "serve")]
     pub vault: Vec<String>,
     /// Use a saved environment from the selected provider.
-    #[arg(long, conflicts_with_all = ["environment_file", "provider", "sandbox_image"])]
+    #[arg(long, conflicts_with_all = ["environment_file", "provider", "sandbox_image", "serve"])]
     pub environment: Option<String>,
     /// Send an environment definition to the selected provider.
-    #[arg(long, conflicts_with_all = ["environment", "provider", "sandbox_image"])]
+    #[arg(long, conflicts_with_all = ["environment", "provider", "sandbox_image", "serve"])]
     pub environment_file: Option<PathBuf>,
-    #[arg(long = "sandbox", value_enum)]
+    #[arg(long = "sandbox", value_enum, conflicts_with = "serve")]
     provider: Option<SandboxProviderArg>,
-    #[arg(long)]
+    #[arg(long, conflicts_with = "serve")]
     sandbox_image: Option<String>,
     /// Mount a host directory: HOST_PATH:GUEST_PATH[:ro|rw].
-    #[arg(long = "mount", value_parser = crate::parse_sandbox_mount)]
+    #[arg(long = "mount", value_parser = crate::parse_sandbox_mount, conflicts_with = "serve")]
     mounts: Vec<FileSystemMount>,
     #[arg(long, value_enum, default_value_t = Verbosity::default())]
     pub verbosity: Verbosity,
 }
 
 impl ThreadArgs {
+    pub(crate) fn agent_file(&self) -> Option<&Path> {
+        self.agent.as_deref().map(Path::new).filter(|path| {
+            path.extension().is_some_and(|extension| extension == "md")
+                || path.components().count() > 1
+        })
+    }
+
     pub(crate) fn local_config(&self) -> Result<ConversationConfig> {
         if self.environment.is_some() || self.environment_file.is_some() {
             return Ok(ConversationConfig::default());
@@ -124,10 +129,7 @@ pub fn harness_selection(definition: &AgentDefinition) -> Result<HarnessSelectio
 
 pub fn load_definition(command: &Commands) -> Result<Option<AgentDefinition>> {
     let path = match command {
-        Commands::Agent {
-            command: crate::AgentCommands::Run { thread, .. },
-            ..
-        } => thread.agent_file.as_deref(),
+        Commands::Run { thread, .. } => thread.agent_file(),
         Commands::Agent {
             command:
                 crate::AgentCommands::Create { file, .. } | crate::AgentCommands::Update { file, .. },
@@ -149,6 +151,48 @@ pub fn local_agent_config(
         Some(&crate::format_harness_selection(selection)),
         model,
     )
+}
+
+pub async fn open_agent(
+    runtime: &Runtime,
+    definition: Option<&AgentDefinition>,
+    args: &ThreadArgs,
+) -> Result<Arc<dyn AgentHandle>> {
+    let mut progress = crate::turn_display::TurnProgress::new();
+    if let Some(definition) = definition {
+        let path = args
+            .agent_file()
+            .context("provide an agent file")?
+            .canonicalize()
+            .context("resolving agent file")?;
+        let name = path.file_stem().context("agent file has no filename")?;
+        let hash = format!("{:x}", Sha256::digest(path.as_os_str().as_encoded_bytes()));
+        let slug = format!("{}-{}", crate::slugify(&name.to_string_lossy()), &hash[..8]);
+        progress
+            .wait(async {
+                tracing::info!(target: "exoharness::progress", "Syncing agent resources...");
+                match runtime.get_agent(&slug).await? {
+                    Some(agent) => {
+                        runtime.update_managed_agent(&agent, definition).await?;
+                        Ok(agent)
+                    }
+                    None => {
+                        runtime
+                            .create_managed_agent(definition, &name.to_string_lossy(), &slug)
+                            .await
+                    }
+                }
+            })
+            .await
+    } else {
+        crate::must_get_agent(
+            runtime,
+            args.agent
+                .as_deref()
+                .context("provide an agent file or saved agent name")?,
+        )
+        .await
+    }
 }
 
 pub async fn open_thread(
@@ -174,41 +218,7 @@ pub async fn open_thread(
             "--egress-policy conflicts with the selected environment's policy; put the credential bindings in the environment policy or remove one policy"
         );
     }
-    let agent = if let Some(definition) = definition {
-        let path = args
-            .agent_file
-            .as_ref()
-            .context("provide --agent-file")?
-            .canonicalize()
-            .context("resolving agent file")?;
-        let name = path.file_stem().context("agent file has no filename")?;
-        let hash = format!("{:x}", Sha256::digest(path.as_os_str().as_encoded_bytes()));
-        let slug = format!("{}-{}", crate::slugify(&name.to_string_lossy()), &hash[..8]);
-        progress
-            .wait(async {
-                tracing::info!(target: "exoharness::progress", "Syncing agent resources...");
-                match runtime.get_agent(&slug).await? {
-                    Some(agent) => {
-                        runtime.update_managed_agent(&agent, definition).await?;
-                        Ok(agent)
-                    }
-                    None => {
-                        runtime
-                            .create_managed_agent(definition, &name.to_string_lossy(), &slug)
-                            .await
-                    }
-                }
-            })
-            .await?
-    } else {
-        crate::must_get_agent(
-            runtime,
-            args.agent
-                .as_deref()
-                .context("provide --agent-file or --agent")?,
-        )
-        .await?
-    };
+    let agent = open_agent(runtime, definition, args).await?;
     let saved_thread = match args.thread.as_deref() {
         Some(reference) => managed::get_thread(agent.as_ref(), reference).await?,
         None => None,

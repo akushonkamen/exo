@@ -46,9 +46,7 @@ async fn open_session_on(f: &Fixture, thread: &str, provider: Option<&str>) -> R
         args.extend(["--provider", provider]);
     }
     args.extend([
-        "agent",
         "run",
-        "--agent",
         agent_id.as_str(),
         "--environment",
         "dev",
@@ -107,14 +105,7 @@ async fn server_and_inline_threads_share_a_root_without_sharing_ownership() -> R
         .await?;
 
     for args in [
-        vec![
-            "agent",
-            "run",
-            "--agent",
-            agent_id.as_str(),
-            "--thread",
-            served_id.as_str(),
-        ],
+        vec!["run", agent_id.as_str(), "--thread", served_id.as_str()],
         vec!["thread", "delete", agent_id.as_str(), served_id.as_str()],
         vec!["agent", "delete", agent_id.as_str()],
         vec![
@@ -170,9 +161,7 @@ async fn server_and_inline_threads_share_a_root_without_sharing_ownership() -> R
         .cli(&[
             "--provider",
             "local",
-            "agent",
             "run",
-            "--agent",
             agent_id.as_str(),
             "--thread",
             "inline",
@@ -232,9 +221,7 @@ async fn inline_previews_keep_their_port_and_live_only_in_their_cli_process() ->
     let f = setup("local").await?;
     let first = f
         .cli(&[
-            "agent",
             "run",
-            "--agent",
             "dev",
             "--environment",
             "dev",
@@ -293,8 +280,7 @@ async fn inline_previews_keep_their_port_and_live_only_in_their_cli_process() ->
     }
 
     let conflict = TcpListener::bind(("127.0.0.1", port)).await?;
-    f.cli(&["agent", "run", "--agent", "dev", "--thread", "project"])
-        .await?;
+    f.cli(&["run", "dev", "--thread", "project"]).await?;
     let replacement = f
         .runtime
         .get_conversation_config(thread.as_ref())
@@ -350,16 +336,7 @@ async fn inline_previews_keep_their_port_and_live_only_in_their_cli_process() ->
     ])
     .await?;
     let disabled = f
-        .cli(&[
-            "agent",
-            "run",
-            "--agent",
-            "dev",
-            "--environment",
-            "dev",
-            "--thread",
-            "project",
-        ])
+        .cli(&["run", "dev", "--environment", "dev", "--thread", "project"])
         .await?;
     assert!(!disabled.contains("sandbox:"));
     let output = f
@@ -414,9 +391,7 @@ async fn http_provider_owns_one_proxy_after_clients_exit_and_removes_deleted_thr
             .is_none()
     );
     f.cli(&[
-        "agent",
         "run",
-        "--agent",
         "dev",
         "--thread",
         "first",

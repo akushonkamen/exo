@@ -32,9 +32,7 @@ async fn named_threads_keep_history_and_explicit_environment_for_local_and_http(
         let first = f
             .output(
                 &[
-                    "agent",
                     "run",
-                    "--agent",
                     "braintrust-dev",
                     "--environment",
                     "local-dev",
@@ -63,9 +61,7 @@ async fn named_threads_keep_history_and_explicit_environment_for_local_and_http(
         let second = f
             .output(
                 &[
-                    "agent",
                     "run",
-                    "--agent",
                     "braintrust-dev",
                     "--environment",
                     "local-dev",
@@ -97,14 +93,7 @@ async fn named_threads_keep_history_and_explicit_environment_for_local_and_http(
         );
         let history = support::success(
             f.output(
-                &[
-                    "agent",
-                    "run",
-                    "--agent",
-                    "braintrust-dev",
-                    "--thread",
-                    "my-project-name",
-                ],
+                &["run", "braintrust-dev", "--thread", "my-project-name"],
                 None,
                 Some("/history\n/quit\n"),
             )
@@ -144,9 +133,7 @@ async fn explicit_egress_policy_conflicting_with_environment_is_rejected() -> Re
     let output = f
         .output(
             &[
-                "agent",
                 "run",
-                "--agent-file",
                 f.agent_file.to_str().context("agent path")?,
                 "--environment-file",
                 environment_file.to_str().context("environment path")?,
@@ -181,9 +168,7 @@ async fn explicit_egress_policy_conflicting_with_environment_is_rejected() -> Re
     f.cli(&["thread", "create", "saved", "Saved", "--slug", "saved"])
         .await?;
     f.cli(&[
-        "agent",
         "run",
-        "--agent",
         "saved",
         "--thread",
         "saved",
@@ -194,9 +179,7 @@ async fn explicit_egress_policy_conflicting_with_environment_is_rejected() -> Re
     let output = f
         .output(
             &[
-                "agent",
                 "run",
-                "--agent",
                 "saved",
                 "--thread",
                 "saved",
@@ -223,9 +206,7 @@ async fn explicit_egress_policy_conflicting_with_environment_is_rejected() -> Re
     ])
     .await?;
     f.cli(&[
-        "agent",
         "run",
-        "--agent",
         "saved",
         "--thread",
         "selected",
@@ -278,9 +259,7 @@ async fn thread_mount_commands_reject_environment_overrides_without_mutating_sta
         .await?;
     // Opening with EOF applies the environment without starting a sandbox.
     f.cli(&[
-        "agent",
         "run",
-        "--agent",
         "saved",
         "--thread",
         "guarded",
@@ -413,16 +392,7 @@ async fn environments_reconcile_saved_threads_locally_and_over_http() -> Result<
         f.cli(&["agent", "create", "saved", "--file", agent_file])
             .await?;
         let output = f
-            .cli(&[
-                "agent",
-                "run",
-                "--agent",
-                "saved",
-                "--environment",
-                "dev",
-                "--prompt",
-                "first",
-            ])
+            .cli(&["run", "saved", "--environment", "dev", "--prompt", "first"])
             .await?;
         let slug = thread_slug(&output)?;
         let agent =
@@ -453,9 +423,7 @@ async fn environments_reconcile_saved_threads_locally_and_over_http() -> Result<
             .await?;
         std::fs::write(workspace.join("saved-work"), "keep me")?;
         f.cli(&[
-            "agent",
             "run",
-            "--agent",
             "saved",
             "--thread",
             slug,
@@ -481,9 +449,7 @@ async fn environments_reconcile_saved_threads_locally_and_over_http() -> Result<
             assert!(resumed_events.iter().any(|saved| saved.id == event.id));
         }
         f.cli(&[
-            "agent",
             "run",
-            "--agent",
             "saved",
             "--thread",
             slug,
@@ -502,19 +468,15 @@ async fn environments_reconcile_saved_threads_locally_and_over_http() -> Result<
                 .lines()
                 .any(|line| line == "dev")
         );
-        f.cli(&[
-            "agent", "run", "--agent", "saved", "--thread", slug, "--prompt", "resumed",
-        ])
-        .await?;
+        f.cli(&["run", "saved", "--thread", slug, "--prompt", "resumed"])
+            .await?;
         let thread = exo_managed_agents::find_thread(agent.as_ref(), slug).await?;
         let sandboxes = thread.list_sandboxes().await?;
         assert_eq!(sandboxes.len(), 1);
         assert_eq!(sandboxes[0].id, sandbox);
         let second = f
             .cli(&[
-                "agent",
                 "run",
-                "--agent",
                 "saved",
                 "--environment-file",
                 path,
@@ -529,9 +491,7 @@ async fn environments_reconcile_saved_threads_locally_and_over_http() -> Result<
             .await?;
         let file_run = f
             .cli(&[
-                "agent",
                 "run",
-                "--agent-file",
                 agent_file,
                 "--environment",
                 "dev",
@@ -553,9 +513,7 @@ async fn environments_reconcile_saved_threads_locally_and_over_http() -> Result<
         let rejected = f
             .output(
                 &[
-                    "agent",
                     "run",
-                    "--agent",
                     "saved",
                     "--environment-file",
                     path,
