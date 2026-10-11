@@ -5,6 +5,10 @@ description: Why exo splits trusted infrastructure from agent semantics.
 
 # Exoharness & Executor
 
+::: warning Under construction
+These docs are still being written, and some documented features are still being implemented. See [Planned additions](/agent-definition#planned-additions).
+:::
+
 Powerful autonomy requires agents to be two things at once:
 
 1. **Adaptable** — able to change their policies, tools, and architecture to
@@ -24,7 +28,7 @@ Exo decouples the two into halves:
 
 ## The exoharness
 
-The durable substrate. It owns identity (agents, conversations, turns),
+The durable substrate. It owns identity (agents, threads, turns),
 history (the append-only event log), artifacts, secrets, and sandbox
 management. It is **trusted and stateful** — and deliberately minimal. It
 deliberately does *not* call the LLM: that requires semantic choices (how
@@ -44,10 +48,11 @@ below it.
 Because the substrate doesn't depend on the executor, an agent built on exo
 can:
 
-- **Fork or rewind** at any past event, without losing secrets, sandboxes,
-  or history.
+- **Fork history** at a past event and restore sandbox state from a
+  corresponding snapshot. History and filesystem state have separate
+  recovery paths — see [Forks and snapshots](time-travel).
 - **Swap executors** — run the same agent via Codex, Claude Code, the
-  Cursor SDK, or your own executor, without rebuilding state.
+  Pi, or your own executor, without rebuilding conversation history.
 - **Evolve safely** — change its own policy processes, tools, and even
   harness code, while the exoharness isolates secrets and compute and keeps
   canonical history out of reach.
@@ -57,3 +62,5 @@ cleanliness. It maximizes the space of behaviors that can evolve *above*
 it: the more of the agent's memory, orchestration, and execution strategy
 that lives in the swappable layer, the more of the agent can become
 programmable and agentic — while the system stays safe and recoverable.
+
+For the execution loop and interrupted-turn recovery, see [Harnesses](../reference/harnesses).

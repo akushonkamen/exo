@@ -1,35 +1,38 @@
 ---
 title: Data Model
-description: Agents, conversations, sessions, turns, events, and artifacts.
+description: Agents, threads, sessions, turns, events, and artifacts.
 ---
 
 # Data Model
 
+::: warning Under construction
+These docs are still being written, and some documented features are still being implemented. See [Planned additions](/agent-definition#planned-additions).
+:::
+
 ## Agent
 
-A global configuration object holding shared metadata and secrets that
-apply across all conversations with an agent — for example, an MCP server
-every user of the agent can access, with a shared secret. The same
-configuration can also be scoped to an individual conversation.
+A configuration object containing instructions, tools, MCP servers,
+resources, and defaults for the harness and model. Threads select their
+environment and vaults, and can override the agent's defaults.
 
-## Conversation, session, turn
+## Thread, session, turn
 
-- A **conversation** is a sequence of interactions with an agent. It can
-  stop and resume, and may accumulate millions of interactions over a very
-  long time. In a coding agent, each "resume" re-enters a conversation.
-- A **session** is one live set of interactions within a conversation —
-  one active instance of it.
+- A **thread** contains an agent's conversation history, execution state,
+  filesystem state, and configuration. It can stop and resume, and may
+  accumulate millions of interactions over a very long time. The low-level
+  exoharness API calls this a **conversation**.
+- A **session** represents a client's interaction with an agent within a
+  thread. A thread, or even a turn, can continue across multiple sessions.
 - A **turn** is one user input, which may map to many LLM calls (tool
   loops, subagents) before producing a final result.
 
-Explicit session lifecycle exists, but the common hot path is
-`beginTurn(...)`: it durably accepts the user's input and returns a **turn
-handle** the executor uses to append events and finish the turn. Head
+Exo durably queues submitted turns before execution. When execution starts,
+`beginTurn(...)` records the user's input and returns a **turn handle**
+the executor uses to append events and finish the turn. Head
 tracking and write ordering stay inside the exoharness, so the executor can
-start the model call as quickly as possible after input arrives.
+start the model call as quickly as possible once execution begins.
 
-For create/resume/fork/delete and how sessions and turns relate to
-adapter wakeups, see [Lifecycles → Conversations](./lifecycles#conversation-lifecycle).
+For creating, resuming, and forking threads, see [Threads](/agent-definition#threads-sessions-and-turns).
 
 ## Event
 

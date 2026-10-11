@@ -1,72 +1,88 @@
 ---
 title: Sandboxes
-description: Isolated execution with pluggable local and remote backends.
+description: Isolated execution, sandbox ownership, and snapshots.
 ---
 
 # Sandboxes
 
+::: warning Under construction
+These docs are still being written, and some documented features are still being implemented. See [Planned additions](/agent-definition#planned-additions).
+:::
+
 Agents benefit from being able to write and run commands in secure
 environments. The exoharness runs sandboxes with pluggable backends and
-gives agents lifecycle control — `create`, `start`, `stop`, `snapshot` —
-plus arbitrary command execution inside them.
+provides lifecycle operations — create, start, stop, snapshot — plus
+command execution inside them.
+
+An **environment** defines the image, provider, mounts, and network policy.
+A **sandbox** is the running instance of that configuration. Managed agents
+normally use a sandbox scoped to their thread, so files survive across
+sessions without being shared with another thread.
 
 ## Backends
 
 | Backend | Type | Notes |
 |:--------|:-----|:------|
-| `docker` | Local | Container; the default |
-| `apple-container` | Local | Container (macOS) |
-| `local-process` | Local | No isolation — commands run on the host |
-| `daytona` | Remote | [daytona.io](https://www.daytona.io) |
-| `e2b` | Remote | [e2b.dev](https://e2b.dev) |
-| `sprites` | Remote | [sprites.dev](https://sprites.dev) |
-| `vercel` | Remote | [Vercel Sandbox](https://vercel.com/docs/vercel-sandbox) |
-| `aws-agentcore` | Remote | [Amazon Bedrock AgentCore](https://aws.amazon.com/bedrock/agentcore/) |
+| `smolvm` | Local | MicroVM; the default |
+| `firecracker` | Local | MicroVM; full VM snapshots, including memory |
+| `docker` | Local | Container |
+| `apple_container` | Local | Container on macOS |
+| `local_process` | Local | Commands run on the host without isolation |
+| `daytona` | Hosted | Daytona sandbox |
+| `e2b` | Hosted | E2B sandbox |
+| `sprites` | Hosted | Sprites sandbox |
+| `vercel` | Hosted | Vercel Sandbox |
+| `aws_agentcore` | Hosted | Amazon Bedrock AgentCore |
 
-Select a provider with `sandbox.provider` in the agent spec; local providers
-need no credentials. Specs use underscores for multiword names, such as
-`apple_container` and `local_process`:
+The default devbox image includes the selected harness, Python, and a
+Node.js/TypeScript development environment. You can select another image
+or provider through an environment. See [Environments](../agent-definition#environments)
+for the configuration syntax.
 
-```bash
-exo agent create 'My Agent' --file agent.md
-```
+Support varies by backend. Exo's credential substitution and proxy-based
+network controls currently require SmolVM or Firecracker.
 
-**Remote** backends are configured as bindings and need an API key:
+## Lifecycle and ownership
 
-```bash
-exo vault secret create global <name> --token-env <PROVIDER_API_KEY>
-exo environment provider create --backend <name> --secret <name>
-```
+The exoharness owns sandbox lifecycle; the harness decides which commands
+to run and when to request a snapshot. A sandbox can outlive the client
+session that started it.
 
-Remote backends run the sandbox on hosted infrastructure instead of your
-machine, so it keeps running even when your local process stops.
+| Operation | Effect |
+|:----------|:-------|
+| Create | Provision a sandbox from an image, mounts, provider, and network policy |
+| Start | Ensure it is running, optionally restoring a supported snapshot |
+| Run | Execute a command inside it |
+| Snapshot | Capture state and record a snapshot id in the event log |
+| Stop | Stop a sandbox created by Exo |
+| Attach | Register an externally created environment, currently an existing Docker container |
+| Detach | Release a borrowed environment without stopping it |
 
-## Scope
+Create is the default path. Attach is useful when another system has
+already provisioned the environment and Exo should execute there. Attached
+sandboxes are borrowed: detach them when done instead of stopping them.
 
-A sandbox can be scoped to a **conversation** (each conversation gets its
-own) or to an **agent** (shared across the agent's conversations) — set at
-creation with `conversation create --sandbox-scope <agent|conversation>`.
-Long-running personal agents like the canonical exo agent typically use an
-agent-scoped sandbox so installed tools persist across conversations.
-
-## Lifecycle
-
-Sandboxes move through create → start/run → snapshot/stop, or through
-**attach / detach** when Exo borrows an externally created environment
-(for example a Docker container started by another system). Attached
-sandboxes must be detached, not stopped. For the full state machine,
-candidate selection during a turn, and how agent vs conversation scope
-behaves over time, see [Lifecycles → Sandbox](./lifecycles#sandbox-lifecycle).
+The low-level API also supports agent-scoped sandboxes shared across
+threads. That is a different ownership choice from the managed-agent
+default of a separate sandbox per thread.
 
 ## Snapshots
 
-Snapshotting a sandbox writes a snapshot id to the event log, tying
-filesystem state to conversation history. That's what lets
-[time travel](./time-travel) restore not just what was said, but the
-environment the agent was working in.
+Snapshotting writes a snapshot id to the event log, tying sandbox state
+to conversation history. Filesystem snapshots capture files; full VM
+snapshots can also preserve memory and running processes. The backend
+determines which formats are available and which can be restored.
 
-## Secrets in sandboxes
+Restoring a snapshot does not erase or rewind the conversation log.
+Forking a thread's history is a separate operation — see
+[Forks and snapshots](time-travel).
 
-Secrets can be securely mounted into sandboxes so programs inside can use
-them **without the LLM being able to view or expose them** — see
-[Bindings & Secrets](./bindings-and-secrets).
+## Credentials and host mounts
+
+Sandbox processes can use placeholder credentials. The runtime substitutes
+the real value only for requests to destinations permitted by the secret's
+policy. See [Vaults and credentials](bindings-and-secrets).
+
+Host mounts expose actual files on the runtime host. Read-only mounts
+prevent writes, but still allow the agent to read their contents. A mount
+containing a raw API key does not provide credential substitution's isolation.

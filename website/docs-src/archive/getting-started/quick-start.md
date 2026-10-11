@@ -1,12 +1,17 @@
 ---
+search: false
 title: Using the CLI Directly
 description: Store a secret, configure an agent, and start chatting.
 ---
 
 # Using the CLI Directly
 
-The [setup script](./installation) does all of this for you. Use this
-page when you've [installed just the CLI](./installation#installing-just-the-cli)
+::: warning Archived documentation
+This page describes the earlier Exo self-agent or older APIs and may be out of date. See the [current docs](/).
+:::
+
+The [setup script](installation) does all of this for you. Use this
+page when you've [installed just the CLI](installation#installing-just-the-cli)
 and want a bare agent — none of the canonical agent's tools or adapters — or want to understand the
 primitives the setup script drives.
 
@@ -46,7 +51,7 @@ Each `exo agent run --agent assistant` invocation starts a new saved thread.
 Use `--agent-file agent.md` to create or update a saved agent from a Markdown file
 and start a saved thread. Rerunning the same file reuses the agent; add
 `--thread <slug>` to resume a thread.
-See [A Sandboxed Conversation](./sandboxed-conversation) to configure a sandbox.
+See [A Sandboxed Conversation](sandboxed-conversation) to configure a sandbox.
 
 Chat runs inline, keeping your terminal scrollback available. Use `exo agent run --agent assistant --tui`
 to opt into the full-screen interface.

@@ -5,6 +5,10 @@ description: Build a TypeScript harness that reuses built-in tools, adds a custo
 
 # Custom Agent Quickstart
 
+::: warning Under construction
+These docs are still being written, and some documented features are still being implemented. See [Planned additions](/agent-definition#planned-additions).
+:::
+
 In this tutorial you'll build a small "system monitor" agent as a single
 TypeScript harness module. It covers the three things most custom agents
 need:
@@ -59,7 +63,7 @@ exo ships three built-ins:
 - `install_agent_tool` / `uninstall_agent_tool` — let the agent write and
   remove its own TypeScript tools at runtime (they land in
   `.exo/agent-tools/`). Using these well also needs the agent-tool-creation
-  instruction; see [The Canonical Agent](../concepts/canonical-agent).
+  instruction; see [The Canonical Agent](../archive/concepts/canonical-agent).
 
 ```ts
 import {
@@ -183,7 +187,7 @@ function gibibytes(bytes: number): string {
 Because the hook re-runs each round, a turn with five tool round-trips sees
 the memory number as of each call, not frozen at the turn's start. (These
 injected messages are rebuilt every round rather than stored in the
-conversation history — see [Data Model](../concepts/data-model) if you
+conversation history — see [Data Model](../reference/data-model) if you
 want the details on why.)
 
 The same pattern scales to anything derivable: the canonical agent's harness
@@ -259,5 +263,5 @@ tool.
 - Let the agent create its own tools at runtime by enabling
   `tool_creation: true` in the spec — the built-in `install_agent_tool` writes tool
   modules to `.exo/agent-tools/`.
-- Read [Executors & Harnesses](../concepts/executors) for how this
+- Read [Executors & Harnesses](../reference/harnesses) for how this
   module relates to the exoharness underneath it.

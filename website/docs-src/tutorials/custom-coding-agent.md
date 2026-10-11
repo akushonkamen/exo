@@ -5,10 +5,14 @@ description: Build a coding agent one component at a time, and see how the harne
 
 # Custom Coding Agent
 
+::: warning Under construction
+These docs are still being written, and some documented features are still being implemented. See [Planned additions](/agent-definition#planned-additions).
+:::
+
 This tutorial builds a coding agent — one that runs commands in a sandbox
 and works through a multi-step task — by adding **one component at a time**
 and seeing how the harness supports each. It builds directly on the two
-hooks from the [Custom Agent Quickstart](./write-your-own-agent):
+hooks from the [Custom Agent Quickstart](write-your-own-agent):
 `registerTools` and `instructions`.
 
 The finished file is
@@ -48,7 +52,7 @@ can read files, search, edit, build, and run — all in the sandbox.
 Now a tool the harness doesn't ship: task tracking, so the model can hold a
 plan across many steps. We define a `todowrite` tool where the model
 rewrites its whole task list each call, and persist that list as a
-conversation [artifact](../concepts/data-model) — the harness's durable
+conversation [artifact](../reference/data-model) — the harness's durable
 key/value storage — so it survives across turns:
 
 ```ts
@@ -275,6 +279,6 @@ command confirmed them.
 
 - Register more built-in tools, or add custom tools for anything the shell
   can't express directly.
-- Read [Executors & Harnesses](../concepts/executors) to see the
+- Read [Executors & Harnesses](../reference/harnesses) to see the
   built-in `codex` / `claude-code` / `cursor` harnesses, which wrap full
   coding-agent runtimes with durable exoharness state.

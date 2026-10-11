@@ -1,9 +1,14 @@
 ---
+search: false
 title: Installation
 description: One setup script to a running agent.
 ---
 
 # Installation
+
+::: warning Archived documentation
+This page describes the earlier Exo self-agent or older APIs and may be out of date. See the [current docs](/).
+:::
 
 ## Prerequisites
 
@@ -43,7 +48,7 @@ When it finishes, two things happen:
   interface to your agent. Open it in any browser, including your phone.
 - It drops you into a local REPL where you can talk to the agent directly.
 
-Head to [Your First Session](./first-session) for what to try next.
+Head to [Your First Session](first-session) for what to try next.
 
 ## Installing just the CLI
 
@@ -59,7 +64,7 @@ exo --help
 ```
 
 This places a release build at `~/.cargo/bin/exo` (on your `PATH` via
-rustup). See [Using the CLI Directly](./quick-start) to register a model
+rustup). See [Using the CLI Directly](quick-start) to register a model
 and start a bare REPL, and run `pnpm install` if you'll use TypeScript
 harnesses.
 

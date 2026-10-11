@@ -1,31 +1,112 @@
 ---
 title: Vaults and credentials
-description: Select credentials independently of the agent definition.
+description: Credential presets, OAuth, per-user vaults, destination policies, and substitution.
 ---
 
 # Vaults and credentials
 
-Vaults store API keys and OAuth tokens. Agent specs refer to their names or IDs;
-the spec contains no secret values.
+::: warning Under construction
+These docs are still being written, and some documented features are still being implemented. See [Planned additions](/agent-definition#planned-additions).
+:::
+
+A **vault** is a named collection of secrets, such as API keys and OAuth credentials, stored safely at rest. Each secret
+has a name and a policy describing where it can be used.
+
+With the local provider, threads inherit the `global` vault, vaults attached to their agent, and any explicitly attached vaults.
+When multiple vaults contain a matching credential, the more specifically attached vault takes precedence. With remote
+providers, the thread automatically uses the authenticated user's vaults.
+
+Missing model credentials fail instead of falling back to host API keys.
+
+## Creating and selecting credentials
+
+With `OPENAI_API_KEY` set, save a model credential:
 
 ```bash
-exo vault secret create global openai --token-env OPENAI_API_KEY --allow-origin https://api.openai.com
+exo vault secret create global --preset openai
 ```
 
-Select the model and credential in the agent spec:
+This creates a secret named `openai` with permission to access `https://api.openai.com`. Select it in the agent definition:
 
 ```yaml
-config:
-  model: gpt-5.5
+model:
+  name: gpt-6.1-sol
   credential: openai
 ```
 
-Attach another vault with `exo agent run --agent assistant --vault personal`.
-Later attachments override same-named entries from earlier vaults, including
-`global`. Missing credentials fail instead of falling back to host API keys.
-MCP declarations and sandbox provider bindings also use vault credentials.
+`model.credential: openai` selects the secret from the thread's vaults.
+The preset is short-hand for:
 
-Sandbox credential policies supply placeholders to the sandbox. Supported
-network adapters substitute the real credential only at its authorized
-destination. Vault values remain in the runtime; rotation and revocation apply
-to subsequent requests.
+```bash
+exo vault secret create global openai \
+  --token-env OPENAI_API_KEY --allow-origin https://api.openai.com
+```
+
+To add a GitHub credential:
+
+```bash
+exo vault secret create global --preset github
+```
+
+The GitHub preset uses `gh` to access your login and permits credential use at `https://github.com` and `https://api.github.com`.
+It creates a secret named `github`. With `GITHUB_PAT` set, you can import a token instead:
+
+```bash
+exo vault secret create global --preset github --token-env GITHUB_PAT
+```
+
+For an MCP server that supports OAuth, you can log in using its resource URL:
+
+```bash
+exo vault secret create global helpdesk --url https://helpdesk.example.com/mcp
+```
+
+Exo discovers the server's OAuth settings and stores the resulting credential with permission to access that URL. MCP
+credentials are selected by their destination policies, so the secret does not have to share the server's name.
+
+## Per-user vaults
+
+You can use the same agent for different users or customers, with a separate vault for each. For example, with
+`ALICE_GITHUB_PAT` and `BOB_GITHUB_PAT` set:
+
+```bash
+exo vault create alice
+exo vault secret create alice --preset github --token-env ALICE_GITHUB_PAT
+
+exo vault create bob
+exo vault secret create bob --preset github --token-env BOB_GITHUB_PAT
+```
+
+Select the user's vault when creating their thread:
+
+```bash
+exo agent run --agent support-analyst --vault alice
+exo agent run --agent support-analyst --vault bob
+```
+
+Both vaults contain a secret named `github`, so the agent definition stays the same. Each thread uses its selected vault's
+credential, which takes precedence over a shared credential with the same name. Shared credentials, eg. a model API key,
+can still come from `global`.
+
+Vaults stay attached when you resume a thread. You can repeat `--vault` to attach multiple vaults, or add another vault when
+resuming with `--thread THREAD`.
+
+## Destination policies
+
+`--allow-origin` permits a secret's use at an origin (scheme, host, and port). `--allow-url` permits its use at an exact URL.
+Both can be repeated. You can update the policy without replacing the secret:
+
+```bash
+exo vault secret update global helpdesk --allow-url https://helpdesk.example.com/mcp
+```
+
+For sandbox credentials, both the environment's network policy and the secret's destination policy need to allow the request.
+Unrestricted networking still respects each secret's policy.
+
+## Credential substitution
+
+Agents get placeholder credentials like `OPENAI_API_KEY=exo_egress_d81f72ff9a6b4ff2bd4e1bae63c207b0`. Exo substitutes the real
+credential outside of the sandbox, on requests to permitted destinations. This lets the agent use a credential without being
+able to read its value. MCP connections use credentials outside the sandbox as well.
+
+Vault values remain in the runtime; rotation and revocation apply to subsequent requests.

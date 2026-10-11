@@ -5,6 +5,10 @@ description: Wire an agent up to a game or any external stateful system with a s
 
 # Game & Third-Party Tool Integration
 
+::: warning Under construction
+These docs are still being written, and some documented features are still being implemented. See [Planned additions](/agent-definition#planned-additions).
+:::
+
 ![An exo agent playing Pokemon Red, watched live in the sidecar's /view page](/images/gameboy-agent-view.png)
 
 This tutorial shows how to connect an agent built in the exoharness framework to an external system, with the motivating example being a Game Boy playing Pokemon Red.
@@ -14,7 +18,7 @@ The finished code is in [`exoharness/examples/gameboy-agent`](https://github.com
 
 ![Architecture: the model talks to the exo turn loop and harness, which drives the emulator sidecar over localhost HTTP](/images/gameboy-agent-architecture.svg)
 
-This builds directly on the [Custom Agent Quickstart](./write-your-own-agent);
+This builds directly on the [Custom Agent Quickstart](write-your-own-agent);
 if you haven't written an exo harness before, start there.
 
 ## Step 1: Running the emulator

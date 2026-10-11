@@ -1,9 +1,13 @@
 ---
 title: Executors & Harnesses
-description: The built-in executor runtimes, from basic to Codex, Claude Code, and Cursor.
+description: Built-in and custom harnesses, their execution loop, and recovery.
 ---
 
 # Executors & Harnesses
+
+::: warning Under construction
+These docs are still being written, and some documented features are still being implemented. See [Planned additions](/agent-definition#planned-additions).
+:::
 
 A harness is an executor running on the exoharness. The `exo` CLI selects
 one with `--harness`:
@@ -21,9 +25,10 @@ one with `--harness`:
 
 ## The executor loop
 
-Whatever the runtime, the canonical loop is the same:
+Exo durably queues submitted turns. Once a turn begins executing, the
+canonical loop is the same across runtimes:
 
-1. `beginTurn(...)` — durably accept the user input, get a turn handle
+1. `beginTurn(...)` — record the user input, get a turn handle
 2. Read or derive prompt history from events
 3. Call the model
 4. Append messages and tool requests through the turn handle
@@ -44,8 +49,8 @@ The `typescript` harness runs a module that owns the turn loop:
 cat > ts-basic.md <<'EOF'
 ---
 harness: exoharness/examples/typescript/basic-harness.ts
-config:
-  model: gpt-5.5
+model:
+  name: gpt-6.1-sol
   credential: openai
 ---
 Help the user with their task.

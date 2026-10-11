@@ -1,9 +1,14 @@
 ---
+search: false
 title: A Sandboxed Conversation
 description: Give your agent a shell in an isolated sandbox.
 ---
 
 # A Sandboxed Conversation
+
+::: warning Archived documentation
+This page describes the earlier Exo self-agent or older APIs and may be out of date. See the [current docs](/).
+:::
 
 The default REPL conversation is plain chat. To let the agent run shell
 commands, create an agent and a conversation explicitly — conversations can
@@ -72,4 +77,4 @@ exo thread sandbox run sandbox-example local-dev "ls /"
 ```
 
 Sandboxes can be snapshotted and rewound together with conversation history
-— see [Time Travel](../concepts/time-travel).
+— see [Time Travel](/concepts/time-travel).

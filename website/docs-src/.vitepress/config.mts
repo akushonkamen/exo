@@ -22,84 +22,108 @@ export default defineConfig({
     },
     siteTitle: "exo",
     nav: [
-      { text: "Home", link: "/" },
+      { text: "Docs", link: "/" },
+      { text: "Archive", link: "/archive/" },
       { text: "GitHub", link: "https://github.com/exoharness/exo" },
     ],
     search: { provider: "local" },
     socialLinks: [{ icon: "github", link: "https://github.com/exoharness/exo" }],
-    sidebar: [
-      { text: "Overview", link: "/" },
-      {
-        text: "Getting Started",
-        link: "/getting-started/",
-        collapsed: false,
-        items: [
-          { text: "Installation", link: "/getting-started/installation" },
-          { text: "Your First Session", link: "/getting-started/first-session" },
-          { text: "Using the CLI Directly", link: "/getting-started/quick-start" },
-          {
-            text: "A Sandboxed Conversation",
-            link: "/getting-started/sandboxed-conversation",
-          },
-        ],
-      },
-      {
-        text: "Concepts",
-        link: "/concepts/",
-        collapsed: false,
-        items: [
-          {
-            text: "Exoharness & Executor",
-            link: "/concepts/exoharness-and-executor",
-          },
-          { text: "Data Model", link: "/concepts/data-model" },
-          { text: "Lifecycles", link: "/concepts/lifecycles" },
-          { text: "Time Travel", link: "/concepts/time-travel" },
-          { text: "Sandboxes", link: "/concepts/sandboxes" },
-          {
-            text: "Bindings & Secrets",
-            link: "/concepts/bindings-and-secrets",
-          },
-          { text: "Executors & Harnesses", link: "/concepts/executors" },
-          { text: "Tools", link: "/concepts/tools" },
-          { text: "Adapters", link: "/concepts/adapters" },
-          { text: "Task Scheduler", link: "/concepts/task-scheduler" },
-          { text: "The Canonical Agent", link: "/concepts/canonical-agent" },
-        ],
-      },
-      {
-        text: "Tutorials",
-        link: "/tutorials/",
-        collapsed: false,
-        items: [
-          {
-            text: "Custom Agent Quickstart",
-            link: "/tutorials/write-your-own-agent",
-          },
-          { text: "Custom Coding Agent", link: "/tutorials/custom-coding-agent" },
-          {
-            text: "Game & Third-Party Tool Integration",
-            link: "/tutorials/game-emulator-integration",
-          },
-        ],
-      },
-      {
-        text: "ExoV2",
-        link: "/exov2/",
-        collapsed: false,
-        items: [
-          { text: "Overview", link: "/exov2/" },
-          { text: "Agent definition", link: "/exov2/agent-definition" },
-          {
-            text: "Tutorials",
-            collapsed: false,
-            items: [
-              { text: "Support agent tutorial", link: "/exov2/tutorial" },
-            ],
-          },
-        ],
-      },
-      { text: "Development", link: "/development/" },
-    ],
+    sidebar: {
+      "/archive/": [
+        { text: "Current docs", link: "/" },
+        { text: "Archive", link: "/archive/" },
+        { text: "Earlier overview", link: "/archive/overview" },
+        {
+          text: "Getting started",
+          link: "/archive/getting-started/",
+          collapsed: true,
+          items: [
+            {
+              text: "Installation",
+              link: "/archive/getting-started/installation",
+            },
+            {
+              text: "Your first session",
+              link: "/archive/getting-started/first-session",
+            },
+            {
+              text: "Using the CLI directly",
+              link: "/archive/getting-started/quick-start",
+            },
+            {
+              text: "A sandboxed conversation",
+              link: "/archive/getting-started/sandboxed-conversation",
+            },
+          ],
+        },
+        {
+          text: "Concepts",
+          link: "/archive/concepts/",
+          collapsed: true,
+          items: [
+            {
+              text: "Self-agent lifecycles",
+              link: "/archive/concepts/lifecycles",
+            },
+            { text: "Self-agent tools", link: "/archive/concepts/tools" },
+            { text: "Adapters", link: "/archive/concepts/adapters" },
+            {
+              text: "Task scheduler",
+              link: "/archive/concepts/task-scheduler",
+            },
+            {
+              text: "The canonical agent",
+              link: "/archive/concepts/canonical-agent",
+            },
+          ],
+        },
+      ],
+      "/": [
+        { text: "Overview", link: "/" },
+        { text: "Agent definition", link: "/agent-definition" },
+        {
+          text: "Tutorials",
+          link: "/tutorials/",
+          collapsed: false,
+          items: [
+            { text: "Support agent", link: "/tutorials/support-agent" },
+            {
+              text: "Custom harness",
+              link: "/tutorials/write-your-own-agent",
+            },
+            {
+              text: "Custom coding agent",
+              link: "/tutorials/custom-coding-agent",
+            },
+            {
+              text: "Game integration",
+              link: "/tutorials/game-emulator-integration",
+            },
+          ],
+        },
+        {
+          text: "Architecture",
+          link: "/concepts/",
+          collapsed: true,
+          items: [
+            {
+              text: "Exoharness & executor",
+              link: "/concepts/exoharness-and-executor",
+            },
+            { text: "Data model", link: "/reference/data-model" },
+            { text: "Harnesses", link: "/reference/harnesses" },
+            { text: "Lifecycles", link: "/concepts/lifecycles" },
+            { text: "Sandboxes", link: "/concepts/sandboxes" },
+            { text: "Forks and snapshots", link: "/concepts/time-travel" },
+            {
+              text: "Vaults and credentials",
+              link: "/concepts/bindings-and-secrets",
+            },
+            { text: "Tools", link: "/concepts/tools" },
+          ],
+        },
+        { text: "Development", link: "/development/" },
+      ],
+    },
   },
 });

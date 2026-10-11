@@ -1,9 +1,14 @@
 ---
+search: false
 title: Adapters
 description: Supervised connections that receive external events and wake conversations.
 ---
 
 # Adapters
+
+::: warning Archived documentation
+This page describes the earlier Exo self-agent or older APIs and may be out of date. See the [current docs](/).
+:::
 
 Adapters are long-running, host-managed bridges to external systems that let an
 agent receive messages from outside the REPL and send explicit replies back:
@@ -17,7 +22,7 @@ agent receive messages from outside the REPL and send explicit replies back:
 - `slack` — Slack bot via Events API
 - `agent-cli` — a local shell adapter for sending prompts from any directory
 
-They are deliberately separate from [tools](./tools):
+They are deliberately separate from [tools](tools):
 
 - A **tool** runs for a bounded model call during a turn.
 - An **adapter** remains available between turns.
@@ -29,7 +34,7 @@ They are deliberately separate from [tools](./tools):
 
 For how the adapter runner supervises workers, drains/restarts, and how
 create → enable → disable → delete interacts with conversations, see
-[Lifecycles → Adapters](./lifecycles#adapter-lifecycle).
+[Lifecycles → Adapters](lifecycles#adapter-lifecycle).
 
 Adapters run as supervised worker processes. The host owns lifecycle, routing,
 durable inbox/outbox records, retries, and conversation wakeups. Each worker
@@ -99,7 +104,7 @@ registries and signed distribution are also outside the current plan.
 The general recipe:
 
 1. **Store credentials as a secret.** Adapter configs never contain raw
-   tokens — they reference [secrets](./bindings-and-secrets) by name:
+   tokens — they reference [secrets](/concepts/bindings-and-secrets) by name:
 
    ```bash
    export DISCORD_BOT_TOKEN="..."

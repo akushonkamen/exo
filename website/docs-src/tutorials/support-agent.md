@@ -1,15 +1,19 @@
 ---
 title: Support agent tutorial
-description: TODO
+description: Build a support agent that reproduces tickets and works with your source code.
 ---
 
 # Support agent tutorial
+
+::: warning Under construction
+These docs are still being written, and some documented features are still being implemented. See [Planned additions](/agent-definition#planned-additions).
+:::
 
 Let’s walk through how to build an increasingly capable support agent, step by step.
 
 ## Before starting
 
-Make sure Exo is installed (<TODO: installation instructions>).
+Make sure Exo is installed. [Installation instructions](/#installation) are still being written.
 
 We’ll use OpenAI models with Codex for this tutorial, so we need to make sure they are authorized. Exo stores secrets in Vaults, which allow an agent to use them (without seeing them). Every thread has access to the `global` vault, so let’s populate an OpenAI API key there:
 
@@ -76,7 +80,7 @@ or, if you have a personal access token
 ```bash
 exo vault secret create global github \
   --token-env GITHUB_PAT \
-  --allow-origin https://github.com
+  --allow-origin https://github.com \
   --allow-origin https://api.github.com
 ```
 
