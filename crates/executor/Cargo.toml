@@ -13,7 +13,7 @@ native = [
   "dep:boa_engine",
   "dep:braintrust-llm-router",
   "dep:braintrust-sdk-rust",
-  "dep:exo-mcp",
+  "exo-mcp/client",
   "exo-managed-agents/client",
   "exoharness/apple-keychain",
   "exoharness/basic-backend",
@@ -45,7 +45,7 @@ braintrust-sdk-rust = { workspace = true, optional = true }
 bytes.workspace = true
 chrono.workspace = true
 cost = { path = "../cost" }
-exo-mcp = { path = "../mcp", optional = true }
+exo-mcp = { path = "../mcp", default-features = false }
 exo-managed-agents = { path = "../managed-agents", default-features = false }
 exoharness = { path = "../exoharness", features = ["store"] }
 encoding_rs = "0.8.35"

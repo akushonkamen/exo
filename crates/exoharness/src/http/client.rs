@@ -478,7 +478,7 @@ async fn http_wait_sandbox_process(
     }
 }
 
-async fn http_cancel_sandbox_process(
+pub(super) async fn http_cancel_sandbox_process(
     harness: &HttpExoHarness,
     scope: ResourceScope,
     request: CancelSandboxProcessRequest,

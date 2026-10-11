@@ -58,7 +58,7 @@ pub(crate) async fn handle(
             Response {
                 status: api::error_status(&error),
                 body: serde_json::to_string(&ErrorBody {
-                    error: error.to_string(),
+                    error: format!("{error:#}"),
                 })
                 .expect("serialize error"),
             }

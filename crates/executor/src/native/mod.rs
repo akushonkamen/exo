@@ -13,7 +13,6 @@ pub mod http_service;
 #[cfg(test)]
 pub(crate) mod http_tests;
 pub(crate) mod local_sandbox;
-pub(crate) mod mcp;
 pub mod remote;
 pub(crate) mod rlm;
 #[cfg(test)]
@@ -39,7 +38,6 @@ pub use harness_runtime::RouterModelClient;
 pub use harness_tool::{BasicToolRuntime, ExoToolRuntime};
 pub use http_provider::HttpProvider;
 pub use local_sandbox::LocalSandboxExoHarness;
-pub use mcp::McpToolRuntime;
 pub use scheduler_runtime::{
     SchedulerRunOptions, redeliver_pending_wakes, run_due_tasks, run_task,
 };

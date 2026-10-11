@@ -35,6 +35,9 @@ pub(crate) enum Operation {
         thread_id: ThreadId,
         request: executor::typescript_runtime::RuntimeRequest,
     },
+    McpHttp {
+        request: crate::mcp::HttpRequest,
+    },
     HasPendingTurns,
     Recover,
     Watch {
@@ -58,6 +61,7 @@ pub(crate) enum Output {
     Policy(std::collections::HashMap<String, String>),
     Headers(Vec<(String, String)>),
     Bool(bool),
+    McpHttp(crate::mcp::HttpResponse),
     Unit(()),
 }
 
@@ -144,6 +148,7 @@ pub(crate) async fn run(
         Operation::HarnessRequest { thread_id, request } => Ok(Output::Harness(
             execution.request_runtime(thread_id, request).await?,
         )),
+        Operation::McpHttp { request } => Ok(Output::McpHttp(execution.mcp.fetch(request).await?)),
         Operation::HasPendingTurns => Ok(Output::Bool(
             !execution.coordinator.pending_threads().await?.is_empty(),
         )),

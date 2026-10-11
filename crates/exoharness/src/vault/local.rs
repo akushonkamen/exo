@@ -4,7 +4,6 @@ mod hosted;
 mod legacy;
 #[cfg(feature = "basic-backend")]
 mod native;
-#[cfg(feature = "basic-backend")]
 mod oauth;
 #[cfg(all(test, feature = "basic-backend"))]
 mod tests;
@@ -27,6 +26,8 @@ pub(crate) struct BasicVaultStore {
 struct Inner {
     storage: Storage,
     cipher: SecretCipher,
+    #[cfg(not(feature = "basic-backend"))]
+    hosted: hosted::RefreshState,
     #[cfg(feature = "basic-backend")]
     native: native::RefreshState,
 }
@@ -62,7 +63,12 @@ struct StoredSecret<M = SecretMetadata> {
 
 impl BasicVaultStore {
     #[cfg(not(feature = "basic-backend"))]
-    pub(crate) fn hosted(store: crate::storage::BasicObjectStore, cipher: SecretCipher) -> Self {
+    pub(crate) fn hosted(
+        store: crate::storage::BasicObjectStore,
+        cipher: SecretCipher,
+        host: Arc<dyn crate::runtime_host::RuntimeHost>,
+        http: Option<Arc<dyn OAuthHttpClient>>,
+    ) -> Self {
         Self {
             inner: Arc::new(Inner {
                 storage: Storage::Host {
@@ -70,6 +76,7 @@ impl BasicVaultStore {
                     lock: tokio::sync::Mutex::new(()),
                 },
                 cipher,
+                hosted: hosted::RefreshState::new(host, http),
             }),
         }
     }
@@ -469,5 +476,51 @@ impl BasicVaultHandle {
                 })
             })
             .await
+    }
+}
+
+impl BasicVaultHandle {
+    async fn persist_refreshed(
+        &self,
+        id: &SecretId,
+        target: &CredentialDestination,
+        resolved: ResolvedSecret,
+        secret: Secret,
+    ) -> Result<ResolvedSecret> {
+        let resolved = if secret == resolved.secret {
+            let current = self.read_for_destination(id, target).await?;
+            if current.revision != resolved.revision {
+                return Ok(current);
+            }
+            current
+        } else {
+            let vault_id = self.record.id;
+            let id = *id;
+            self.store
+                .access(true, move |catalog, cipher| {
+                    let stored = vault(catalog, vault_id)?
+                        .secrets
+                        .iter_mut()
+                        .find(|s| s.metadata.id == id)
+                        .context("secret is unavailable")?;
+                    if stored.metadata.revision != resolved.revision {
+                        bail!("credential changed during refresh; retry the operation");
+                    }
+                    let mut metadata = stored.metadata.clone();
+                    metadata.revision = metadata
+                        .revision
+                        .checked_add(1)
+                        .context("secret revision overflow")?;
+                    let encrypted = encrypt(cipher, vault_id, &metadata, &secret)?;
+                    stored.metadata = metadata;
+                    stored.secret = encrypted;
+                    Ok(ResolvedSecret {
+                        revision: stored.metadata.revision,
+                        secret,
+                    })
+                })
+                .await?
+        };
+        Ok(resolved)
     }
 }

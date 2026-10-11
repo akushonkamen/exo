@@ -1070,7 +1070,70 @@ impl<'a> BasicScopedSandboxHandle<'a> {
         process_id: &str,
     ) -> Result<Arc<RunningSandboxProcess>> {
         self.harness.check(self.owner).await?;
-        require_running_sandbox_process(self.harness, sandbox_id, process_id).await
+        let cached = self
+            .harness
+            .inner
+            .running_processes
+            .lock()
+            .await
+            .get(process_id)
+            .cloned();
+        if let Some(process) = cached {
+            if process.sandbox_id != sandbox_id {
+                bail!("sandbox process {process_id} does not belong to sandbox {sandbox_id}");
+            }
+            return Ok(process);
+        }
+        // Completed process results outlive the host that held their live I/O.
+        // A restarted server (or an unloaded Durable Object) reads the same log.
+        let mut events = Vec::new();
+        let mut status = None;
+        for event in load_events(&self.harness.inner.storage, &self.owner_dir).await? {
+            match event.data {
+                EventData::SandboxProcessStarted {
+                    sandbox_id: id,
+                    process_id: pid,
+                    status: started,
+                    ..
+                } if id == sandbox_id && pid == process_id => status = Some(started),
+                EventData::SandboxProcessEvent {
+                    sandbox_id: id,
+                    process_id: pid,
+                    event,
+                } if id == sandbox_id && pid == process_id => events.push(event),
+                _ => {}
+            }
+        }
+        let mut status =
+            status.ok_or_else(|| anyhow!("sandbox process not found: {process_id}"))?;
+        events.sort_by_key(SandboxProcessEvent::cursor);
+        for event in &events {
+            status = match event {
+                SandboxProcessEvent::Exit { exit_code, .. } => SandboxProcessStatus::Exited {
+                    exit_code: *exit_code,
+                },
+                SandboxProcessEvent::Error { message, .. } => SandboxProcessStatus::Failed {
+                    message: message.clone(),
+                },
+                SandboxProcessEvent::Cancelled { .. } => SandboxProcessStatus::Cancelled,
+                _ => status,
+            };
+        }
+        if status.is_running() {
+            bail!("sandbox process lost its live connection: {process_id}");
+        }
+        Ok(Arc::new(RunningSandboxProcess {
+            event_log: self.process_event_log(),
+            sandbox_id: sandbox_id.into(),
+            process_id: process_id.into(),
+            stdin: AsyncMutex::new(None),
+            events: AsyncMutex::new(events),
+            status: AsyncMutex::new(status),
+            open_output_streams: AsyncMutex::new(0),
+            output_drained: Notify::new(),
+            tasks: Mutex::new(None),
+            notify: Notify::new(),
+        }))
     }
 
     pub(super) fn process_event_log(&self) -> Option<SandboxProcessEventLog> {
@@ -1745,25 +1808,6 @@ pub(super) fn sandbox_provider_state_event(
             state,
         })?,
     }))
-}
-
-pub(super) async fn require_running_sandbox_process(
-    harness: &BasicExoHarness,
-    sandbox_id: &str,
-    process_id: &str,
-) -> Result<Arc<RunningSandboxProcess>> {
-    let process = harness
-        .inner
-        .running_processes
-        .lock()
-        .await
-        .get(process_id)
-        .cloned()
-        .ok_or_else(|| anyhow!("sandbox process not found: {process_id}"))?;
-    if process.sandbox_id != sandbox_id {
-        bail!("sandbox process {process_id} does not belong to sandbox {sandbox_id}");
-    }
-    Ok(process)
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

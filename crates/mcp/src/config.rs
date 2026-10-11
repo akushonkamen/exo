@@ -2,7 +2,7 @@ use std::collections::HashSet;
 
 use anyhow::{Context, Result, bail};
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct McpServerConfig {
     pub name: String,
     pub url: String,

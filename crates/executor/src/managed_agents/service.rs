@@ -755,7 +755,7 @@ pub async fn cancel_turn(
     })
 }
 
-/// Forward transient model chunks from the turn stream to live subscribers.
+/// Forward transient model chunks and preparation statuses to live subscribers.
 pub async fn forward_progress(
     mut events: crate::ExecutionStreamHandle,
     thread_id: ThreadId,
@@ -763,22 +763,38 @@ pub async fn forward_progress(
     progress: broadcast::Sender<Event>,
 ) {
     while let Some(event) = events.next().await {
-        match event {
-            Ok(crate::ExecutionStreamEvent::Chunk(chunk)) => {
-                let event = Event {
-                    id: Uuid7::now(),
-                    thread_id,
-                    session_id: Some(turn.session_id),
-                    turn_id: Some(turn.id),
-                    created_at: chrono::Utc::now(),
-                    data: EventData::LinguaStreamChunk { chunk },
-                };
-                if progress.send(event).is_err() {
-                    tracing::trace!("no runtime progress subscribers");
+        let data = match event {
+            Ok(crate::ExecutionStreamEvent::Chunk(chunk)) => EventData::LinguaStreamChunk { chunk },
+            Ok(crate::ExecutionStreamEvent::Status { message }) => {
+                let payload =
+                    match serde_json::to_value(crate::executor_types::RuntimeStatus { message }) {
+                        Ok(payload) => payload,
+                        Err(error) => {
+                            tracing::error!(%error, "could not encode runtime status");
+                            continue;
+                        }
+                    };
+                EventData::Custom {
+                    event_type: crate::executor_types::RUNTIME_STATUS.into(),
+                    payload,
                 }
             }
-            Ok(_) => {}
-            Err(error) => tracing::warn!(%error, turn_id = %turn.id, "runtime turn failed"),
+            Ok(_) => continue,
+            Err(error) => {
+                tracing::warn!(%error, turn_id = %turn.id, "runtime turn failed");
+                continue;
+            }
+        };
+        let event = Event {
+            id: Uuid7::now(),
+            thread_id,
+            session_id: Some(turn.session_id),
+            turn_id: Some(turn.id),
+            created_at: chrono::Utc::now(),
+            data,
+        };
+        if progress.send(event).is_err() {
+            tracing::trace!("no runtime progress subscribers");
         }
     }
 }

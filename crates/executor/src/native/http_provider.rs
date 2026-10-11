@@ -327,7 +327,7 @@ impl ExoHttpTransport for RuntimeTransport {
             }),
             Request::DeleteVault { vault_id } => {
                 self.client.delete_vault(vault_id).await?;
-                Ok(Response::Unit)
+                Ok(Response::Bool { value: true })
             }
             Request::VaultPutSecret {
                 scope,
@@ -361,7 +361,7 @@ impl ExoHttpTransport for RuntimeTransport {
                 self.client
                     .delete_secret(scope, vault_id, secret_id)
                     .await?;
-                Ok(Response::Unit)
+                Ok(Response::Bool { value: true })
             }
             Request::ListVaults { scope } => Ok(Response::Vaults {
                 vaults: self.client.list_vaults(scope).await?,

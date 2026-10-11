@@ -10,9 +10,9 @@ use futures::{Sink, SinkExt, StreamExt, TryStreamExt};
 use super::client::HttpExoHarness;
 use crate::runtime_host::RuntimeHost;
 use crate::{
-    CloseSandboxProcessInputRequest, ResourceScope, SandboxId, SandboxProcess, SandboxProcessEvent,
-    SandboxProcessEventQuery, SandboxProcessId, SandboxProcessParts, SandboxProcessStatus,
-    WriteSandboxProcessInputRequest,
+    CancelSandboxProcessRequest, CloseSandboxProcessInputRequest, ResourceScope, SandboxId,
+    SandboxProcess, SandboxProcessEvent, SandboxProcessEventQuery, SandboxProcessId,
+    SandboxProcessParts, SandboxProcessStatus, WriteSandboxProcessInputRequest,
 };
 
 struct LiveHttpSandboxProcess(SandboxProcessParts);
@@ -29,6 +29,14 @@ pub(super) fn open(
     sandbox_id: SandboxId,
     process_id: SandboxProcessId,
 ) -> Box<dyn SandboxProcess> {
+    let guard = CancelProcess {
+        harness: harness.clone(),
+        host: host.clone(),
+        scope,
+        sandbox_id: sandbox_id.clone(),
+        process_id: process_id.clone(),
+        finished: false,
+    };
     let (stdout_tx, stdout_rx) = mpsc::channel(8);
     let (stderr_tx, stderr_rx) = mpsc::channel(8);
     let (stdin_tx, mut stdin_rx) = mpsc::channel(8);
@@ -87,9 +95,12 @@ pub(super) fn open(
         stderr: reader(stderr_rx),
         stdin: Box::pin(ProcessInput(stdin_tx)),
         wait: Box::pin(async move {
-            wait_rx
+            let mut guard = guard;
+            let result = wait_rx
                 .await
-                .map_err(|_| anyhow!("HTTP sandbox process poller stopped"))?
+                .map_err(|_| anyhow!("HTTP sandbox process poller stopped"))??;
+            guard.finished = true;
+            Ok(result)
         }),
     }))
 }
@@ -161,5 +172,37 @@ impl AsyncWrite for ProcessInput {
         Pin::new(&mut self.0)
             .poll_close(cx)
             .map_err(std::io::Error::other)
+    }
+}
+
+// Attached processes must stop when their caller drops the wait future, including
+// cancellation during resource preparation before the executor is initialized.
+struct CancelProcess {
+    harness: HttpExoHarness,
+    host: Arc<dyn RuntimeHost>,
+    scope: ResourceScope,
+    sandbox_id: SandboxId,
+    process_id: SandboxProcessId,
+    finished: bool,
+}
+impl Drop for CancelProcess {
+    fn drop(&mut self) {
+        if self.finished {
+            return;
+        }
+        let harness = self.harness.clone();
+        let scope = self.scope;
+        let request = CancelSandboxProcessRequest {
+            sandbox_id: self.sandbox_id.clone(),
+            process_id: self.process_id.clone(),
+            signal: None,
+        };
+        self.host.spawn(Box::pin(async move {
+            if let Err(error) =
+                super::client::http_cancel_sandbox_process(&harness, scope, request).await
+            {
+                tracing::warn!(%error, "failed to cancel abandoned HTTP sandbox process");
+            }
+        }));
     }
 }

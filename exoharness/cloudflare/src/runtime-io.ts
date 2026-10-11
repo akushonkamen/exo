@@ -1,3 +1,4 @@
+import { mcp, type McpCommand, type McpHttpRequest } from "./mcp";
 import { init as initLingua } from "@braintrust/lingua/browser";
 import linguaWasm from "@braintrust/lingua-wasm/browser/lingua_bg.wasm";
 import { createCodexHarness } from "../../typescript/codex/harness";
@@ -59,6 +60,17 @@ type HarnessRequest = {
   payload: RawTypeScriptInitPayload;
 };
 export type HostRequest =
+  | {
+      type: "oauth_http";
+      request: {
+        url: string;
+        method: string;
+        headers: [string, string][];
+        body: Uint8Array;
+      };
+    }
+  | { type: "mcp"; command: McpCommand }
+  | { type: "mcp_http"; request: McpHttpRequest; token: string | null }
   | { type: "storage"; operation: StorageOperation }
   | { type: "sandbox"; command: SandboxCommand }
   | {
@@ -102,6 +114,39 @@ export class RuntimeIO {
 
   async handle(request: HostRequest, signal: AbortSignal): Promise<unknown> {
     switch (request.type) {
+      case "oauth_http": {
+        const r = request.request;
+        const response = await fetch(r.url, {
+          method: r.method,
+          headers: r.headers,
+          body: r.body,
+          redirect: "manual",
+          signal: AbortSignal.any([signal, AbortSignal.timeout(30_000)]),
+        });
+        return {
+          status: response.status,
+          headers: [...response.headers],
+          body: new Uint8Array(await response.arrayBuffer()),
+        };
+      }
+      case "mcp":
+        return mcp(request.command, this.runtime, signal);
+      case "mcp_http": {
+        const r = request.request;
+        const headers = new Headers(r.headers);
+        headers.delete("authorization");
+        if (request.token)
+          headers.set("authorization", `Bearer ${request.token}`);
+        const response = await fetch(r.url, {
+          method: r.method,
+          headers,
+          body: r.body,
+          redirect: "manual",
+          signal,
+        });
+        if (response.status === 401) await response.body?.cancel();
+        return { status: response.status, response };
+      }
       case "account_request":
         return this.env.PROVIDERS.getByName(this.env.ACCOUNT_ID).requestExo(
           request.request,

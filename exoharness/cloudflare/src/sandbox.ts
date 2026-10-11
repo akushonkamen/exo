@@ -257,7 +257,7 @@ export class ExoSandbox extends DurableObject<Env> {
       const options = {
         entrypoint: ["sleep", "infinity"],
         enableInternet: false,
-        instance: "lite" as const,
+        instance: this.env.SANDBOX_INSTANCE ?? "lite",
       };
       container.start(
         snapshot

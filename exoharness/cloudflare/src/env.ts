@@ -13,6 +13,7 @@ export interface Env {
   // Set to require the platform-verified Cloudflare Access application audience.
   ACCESS_AUD?: string;
   VAULT_KEY: string;
+  SANDBOX_INSTANCE?: ContainerStartupOptions["instance"];
 }
 
 export interface SandboxIdentity {

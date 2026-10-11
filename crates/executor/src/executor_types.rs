@@ -141,8 +141,26 @@ impl ConversationConfig {
         thread: &dyn ConversationHandle,
         agent_config: &AgentConfig,
     ) -> Result<()> {
+        self.materialize_resources_with_progress(thread, agent_config, &|message| {
+            tracing::info!(target: "exoharness::progress", "{message}");
+        })
+        .await
+    }
+
+    pub(crate) async fn materialize_resources_with_progress(
+        &mut self,
+        thread: &dyn ConversationHandle,
+        agent_config: &AgentConfig,
+        progress: &(dyn Fn(String) + Send + Sync),
+    ) -> Result<()> {
         if !self.resources.is_empty() {
-            tracing::info!(target: "exoharness::progress", "Preparing workspace");
+            progress("Preparing workspace".into());
+            if !exoharness::resources::uses_host_resource_mounts(
+                &self.effective_sandbox_provider(agent_config),
+            ) {
+                return crate::sandbox_resources::materialize(thread, agent_config, self, progress)
+                    .await;
+            }
             self.resource_mounts = thread
                 .materialize_resources(
                     self.resources.clone(),
@@ -293,8 +311,18 @@ impl ExecutionStreamHandle {
     }
 }
 
+pub(crate) const RUNTIME_STATUS: &str = "runtime_status";
+
+#[derive(Serialize, Deserialize)]
+pub(crate) struct RuntimeStatus {
+    pub(crate) message: String,
+}
+
 #[derive(Debug, Clone)]
 pub enum ExecutionStreamEvent {
+    Status {
+        message: String,
+    },
     ApprovalRequested {
         turn: exoharness::TurnRecord,
         approval: crate::permissions::ApprovalRequest,

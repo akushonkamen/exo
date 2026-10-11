@@ -22,6 +22,16 @@ pub(crate) enum HostRequest {
     Sandbox {
         command: crate::sandbox::Command,
     },
+    Mcp {
+        command: crate::mcp::Command,
+    },
+    McpHttp {
+        request: crate::mcp::HttpRequest,
+        token: Option<String>,
+    },
+    OauthHttp {
+        request: OAuthRequest,
+    },
     Model {
         request: ModelRequest,
     },
@@ -199,5 +209,48 @@ impl exoharness::Storage for HostStorage {
                 },
             })
             .await
+    }
+}
+
+#[derive(Serialize)]
+pub(crate) struct OAuthRequest {
+    url: String,
+    method: String,
+    headers: Vec<(String, String)>,
+    #[serde(with = "serde_bytes")]
+    body: Vec<u8>,
+}
+#[derive(serde::Deserialize)]
+struct OAuthResponse {
+    status: u16,
+    headers: Vec<(String, String)>,
+    #[serde(with = "serde_bytes")]
+    body: Vec<u8>,
+}
+pub(crate) struct WorkerOAuthHttpClient(pub Arc<Host>);
+#[async_trait]
+impl exoharness::vault::OAuthHttpClient for WorkerOAuthHttpClient {
+    async fn request(&self, request: oauth2::HttpRequest) -> Result<oauth2::HttpResponse> {
+        let (parts, body) = request.into_parts();
+        let response: OAuthResponse = self
+            .0
+            .call(HostRequest::OauthHttp {
+                request: OAuthRequest {
+                    url: parts.uri.to_string(),
+                    method: parts.method.to_string(),
+                    body,
+                    headers: parts
+                        .headers
+                        .iter()
+                        .map(|(name, value)| Ok((name.to_string(), value.to_str()?.to_owned())))
+                        .collect::<Result<_>>()?,
+                },
+            })
+            .await?;
+        let mut builder = http::Response::builder().status(response.status);
+        for (name, value) in response.headers {
+            builder = builder.header(name, value);
+        }
+        Ok(builder.body(response.body)?)
     }
 }

@@ -1,7 +1,8 @@
 use crate::execution_tracing::TurnExecutionTrace;
 use crate::harness_executor::{ExecutorStreamMode, HarnessExecutor};
+use crate::managed_mcp::{PreparedMcp, connect_mcp};
 use crate::native::config;
-use crate::native::managed_mcp::{PreparedMcp, connect_mcp};
+use crate::native::managed_mcp::validate_thread;
 use crate::{
     AgentConfig, AgentHarnessKind, BasicExecutor, BasicToolRuntime, ConversationConfig,
     ExoToolRuntime, McpToolRuntime, RouterModelClient, SendRequest,
@@ -67,8 +68,9 @@ impl ManagedExecutor {
             .or_default()
             .clone();
         cell.get_or_try_init(|| async {
-            let mcp = connect_mcp(agent, thread, &self.config).await?;
-            mcp.configure_thread(config, thread, thread_config).await?;
+            let mcp = connect_mcp(agent, thread, &exo_mcp::NativeMcpConnector).await?;
+            validate_thread(&mcp, &self.config, config, thread_config)?;
+            mcp.configure_thread(thread).await?;
             let tools = Arc::new(McpToolRuntime::new(BasicToolRuntime, mcp.tools.clone()));
             let model = Arc::new(RouterModelClient::new(self.env.clone()));
             let executor: Arc<dyn HarnessExecutor> = match config.harness {
@@ -122,7 +124,7 @@ impl ManagedExecutor {
             prepared.mcp.servers == servers,
             "MCP configuration changed; start a new thread"
         );
-        prepared.mcp.validate_thread(config, thread_config)?;
+        validate_thread(&prepared.mcp, &self.config, config, thread_config)?;
         Ok(cell)
     }
 }

@@ -53,12 +53,8 @@ pub(crate) fn worker_agent_config(
         "this Worker supports basic and codex harnesses"
     );
     ensure!(
-        f.resources.is_empty()
-            && f.mcp_servers.is_empty()
-            && f.tools.is_empty()
-            && f.adapters.is_empty()
-            && !f.tool_creation,
-        "resources, MCP, custom tools and adapters are not supported by this Worker"
+        f.tools.is_empty() && f.adapters.is_empty() && !f.tool_creation,
+        "custom tools and adapters are not supported by this Worker"
     );
     ensure!(
         f.config.braintrust.is_none(),
@@ -118,13 +114,15 @@ impl ToolRuntime for WorkerTools {
 pub(crate) struct WorkerExecutor {
     pub coordinator: Arc<dyn exoharness::turn_coordinator::TurnQueue<executor::TurnWork>>,
     pub host: Arc<Host>,
-    pub basic: BasicExecutor<WorkerModel, WorkerTools>,
+    pub mcp: Arc<crate::mcp::WorkerMcp>,
     pub state: Arc<dyn exoharness::ExoHarness>,
     pub sandbox_default: SandboxProvider,
-    pub harnesses: Mutex<HashMap<exoharness::ThreadId, Arc<WorkerHarness>>>,
+    pub harnesses: Mutex<HashMap<exoharness::ThreadId, Arc<tokio::sync::OnceCell<WorkerHarness>>>>,
 }
 
 pub(crate) struct WorkerHarness {
+    mcp: executor::managed_mcp::PreparedMcp,
+    basic: BasicExecutor<WorkerModel, executor::McpToolRuntime<WorkerTools>>,
     runtime: TypeScriptRuntime,
     turn: Mutex<Option<Arc<WorkerTurn>>>,
 }
@@ -162,6 +160,39 @@ impl Drop for ActiveTurn<'_> {
 
 #[async_trait]
 impl HarnessExecutor for WorkerExecutor {
+    async fn reset_thread(&self, thread: exoharness::ThreadId) -> Result<()> {
+        let cell = self
+            .harnesses
+            .lock()
+            .expect("Worker harnesses poisoned")
+            .remove(&thread);
+        if let Some(cell) = cell
+            && let Some(harness) = cell.get()
+        {
+            let stopped = harness.runtime.shutdown().await;
+            let closed = harness.mcp.tools.close().await;
+            stopped?;
+            closed?;
+        }
+        Ok(())
+    }
+
+    async fn shutdown(&self) -> Result<()> {
+        let threads = self
+            .harnesses
+            .lock()
+            .expect("Worker harnesses poisoned")
+            .keys()
+            .copied()
+            .collect::<Vec<_>>();
+        let results =
+            futures::future::join_all(threads.into_iter().map(|id| self.reset_thread(id))).await;
+        for result in results {
+            result?;
+        }
+        Ok(())
+    }
+
     fn name(&self) -> &'static str {
         "worker"
     }
@@ -174,6 +205,23 @@ impl HarnessExecutor for WorkerExecutor {
     fn can_reconcile_unresolved_tool_call(&self, config: &AgentConfig) -> bool {
         config.harness == AgentHarnessKind::TypeScript
     }
+    async fn configure_managed_thread(
+        &self,
+        agent: &dyn AgentHandle,
+        thread: &dyn ConversationHandle,
+        config: &AgentConfig,
+        thread_config: &ConversationConfig,
+    ) -> Result<usize> {
+        let cell = self.harness(agent, thread, config, thread_config).await?;
+        Ok(cell
+            .get()
+            .expect("Worker harness initialized")
+            .mcp
+            .tools
+            .tools()
+            .len())
+    }
+
     async fn prepare_conversation(
         &self,
         agent: &dyn AgentHandle,
@@ -181,12 +229,8 @@ impl HarnessExecutor for WorkerExecutor {
         config: &AgentConfig,
         thread_config: &ConversationConfig,
     ) -> Result<()> {
+        self.harness(agent, thread, config, thread_config).await?;
         ensure_conversation_sandbox(thread, config, thread_config, None).await?;
-        if config.harness == AgentHarnessKind::Basic {
-            self.basic
-                .prepare_conversation(agent, thread, config, thread_config)
-                .await?;
-        }
         Ok(())
     }
     async fn cancel_turn(
@@ -200,7 +244,9 @@ impl HarnessExecutor for WorkerExecutor {
             .expect("Worker harnesses poisoned")
             .get(&thread.record().id)
             .cloned();
-        if let Some(harness) = harness {
+        if let Some(cell) = harness
+            && let Some(harness) = cell.get()
+        {
             harness.runtime.shutdown().await?;
         }
         Ok(())
@@ -256,6 +302,79 @@ impl HarnessExecutor for WorkerExecutor {
 }
 
 impl WorkerExecutor {
+    async fn harness(
+        &self,
+        agent: &dyn AgentHandle,
+        thread: &dyn ConversationHandle,
+        config: &AgentConfig,
+        thread_config: &ConversationConfig,
+    ) -> Result<Arc<tokio::sync::OnceCell<WorkerHarness>>> {
+        let cell = self
+            .harnesses
+            .lock()
+            .expect("Worker harnesses poisoned")
+            .entry(thread.record().id)
+            .or_default()
+            .clone();
+        let harness = cell
+            .get_or_try_init(|| async {
+                let mcp =
+                    executor::managed_mcp::connect_mcp(agent, thread, self.mcp.as_ref()).await?;
+                mcp.configure_thread(thread).await?;
+                let tools = Arc::new(executor::McpToolRuntime::new(
+                    WorkerTools,
+                    mcp.tools.clone(),
+                ));
+                let thread = self
+                    .state
+                    .get_agent(&agent.record().id)
+                    .await?
+                    .ok_or_else(|| anyhow::anyhow!("agent not found"))?
+                    .get_thread(&thread.record().id)
+                    .await?
+                    .ok_or_else(|| anyhow::anyhow!("thread not found"))?;
+                let host = self.host.clone();
+                let runtime = TypeScriptRuntime::new(
+                    thread,
+                    tools.clone(),
+                    self.host.clone(),
+                    Arc::new(move |event| {
+                        host.events
+                            .lock()
+                            .expect("Worker events poisoned")
+                            .push(event);
+                        Ok(())
+                    }),
+                );
+                Ok::<_, anyhow::Error>(WorkerHarness {
+                    runtime,
+                    mcp,
+                    turn: Mutex::default(),
+                    basic: BasicExecutor::with_pricing(
+                        Arc::new(WorkerModel(self.host.clone())),
+                        tools,
+                        Arc::new(cost::PricingTable::empty()),
+                    ),
+                })
+            })
+            .await?;
+        let definition = exo_managed_agents::load_definition(agent).await?;
+        let servers = match definition {
+            Some(definition) => definition.resolve_mcp_servers(&()).await?,
+            None => vec![],
+        };
+        ensure!(
+            harness.mcp.servers == servers,
+            "MCP configuration changed; start a new thread"
+        );
+        // Both harnesses validate the same per-server tool policies.
+        harness
+            .basic
+            .prepare_conversation(agent, thread, config, thread_config)
+            .await?;
+        Ok(cell)
+    }
+
     pub fn emit_stream(
         &self,
         thread: exoharness::ThreadId,
@@ -265,6 +384,9 @@ impl WorkerExecutor {
         let harness = harnesses
             .get(&thread)
             .ok_or_else(|| anyhow::anyhow!("TypeScript harness is not active"))?;
+        let harness = harness
+            .get()
+            .ok_or_else(|| anyhow::anyhow!("Worker harness is not initialized"))?;
         let turn = harness.turn.lock().expect("Worker turn poisoned");
         let turn = turn
             .as_ref()
@@ -291,6 +413,9 @@ impl WorkerExecutor {
             .get(&thread)
             .cloned()
             .ok_or_else(|| anyhow::anyhow!("TypeScript harness is not active"))?;
+        let harness = harness
+            .get()
+            .ok_or_else(|| anyhow::anyhow!("Worker harness is not initialized"))?;
         let turn = harness.turn.lock().expect("Worker turn poisoned").clone();
         harness
             .runtime
@@ -310,12 +435,16 @@ impl WorkerExecutor {
         trace: Option<&dyn TurnExecutionTrace>,
         recovering: bool,
     ) -> Result<()> {
+        let cell = self
+            .harness(agent, thread.as_ref(), config, thread_config)
+            .await?;
+        let harness = cell.get().expect("Worker harness initialized");
         let sandbox_id =
             ensure_conversation_sandbox(thread.as_ref(), config, thread_config, None).await?;
         let _activity = thread.sandbox_activity(sandbox_id).await?;
         if config.harness == AgentHarnessKind::Basic {
             if recovering {
-                return self
+                return harness
                     .basic
                     .resume_turn(
                         agent,
@@ -329,7 +458,7 @@ impl WorkerExecutor {
                     )
                     .await;
             }
-            return self
+            return harness
                 .basic
                 .execute_turn(
                     agent,
@@ -347,30 +476,6 @@ impl WorkerExecutor {
             config.harness == AgentHarnessKind::TypeScript,
             "harness is not supported by this Worker"
         );
-        let harness = self
-            .harnesses
-            .lock()
-            .expect("Worker harnesses poisoned")
-            .entry(thread.record().id)
-            .or_insert_with(|| {
-                let host = self.host.clone();
-                Arc::new(WorkerHarness {
-                    runtime: TypeScriptRuntime::new(
-                        thread.clone(),
-                        Arc::new(WorkerTools),
-                        self.host.clone(),
-                        Arc::new(move |event| {
-                            host.events
-                                .lock()
-                                .expect("Worker events poisoned")
-                                .push(event);
-                            Ok(())
-                        }),
-                    ),
-                    turn: Mutex::default(),
-                })
-            })
-            .clone();
         let turn = Arc::new(WorkerTurn {
             agent: self
                 .state
@@ -391,7 +496,7 @@ impl WorkerExecutor {
             .init(&turn.context(), request, recovering, None)
             .await?;
         *harness.turn.lock().expect("Worker turn poisoned") = Some(turn);
-        let active_turn = ActiveTurn(harness.as_ref());
+        let active_turn = ActiveTurn(harness);
         let result = self.host.call::<()>(HostRequest::Harness { payload }).await;
         drop(active_turn);
         if result.is_err() {

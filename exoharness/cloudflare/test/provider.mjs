@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { readFile, readdir, mkdtemp, rm } from "node:fs/promises";
+import { readFile, readdir, mkdtemp, mkdir, rm } from "node:fs/promises";
 import { resolve } from "node:path";
 import { after, before, test } from "node:test";
 import { Miniflare } from "miniflare";
@@ -28,6 +28,8 @@ const token = "test-operator-token";
 let mf;
 let persistence;
 const key = "synthetic-model-key";
+let mcpCalls = 0;
+let oauthRefreshes = 0;
 
 const fakeSandbox = `import { DurableObject, RpcTarget, RpcStub } from "cloudflare:workers";
 ${fakeCodex}
@@ -85,7 +87,9 @@ export class FakeSandbox extends DurableObject {
     if (request.command[0] === "cat") return new EchoProcess();
     if (!request.command.join(" ").includes("codex")) {
       if (request.command[2] !== "true") await this.ctx.storage.put("count", (await this.count()) + 1);
-      return new FakeProcess({stdout: new ReadableStream({start(c) { c.enqueue("Linux test\\n"); c.close(); }}), stderr: new ReadableStream({start(c) {c.close();}}), writeStdin: async () => {}, closeStdin: async () => {}, close: async () => {}, wait: async () => 0});
+      const git = request.command.join(" ").includes("--no-recurse-submodules");
+      const failed = request.command.join(" ").includes("example/disk-full.git");
+      return new FakeProcess({stdout: new ReadableStream({start(c) { c.enqueue("Linux test\\n"); c.close(); }}), stderr: new ReadableStream({start(c) { if (git) c.enqueue(failed ? "fatal: write error: No space left on device\\n" : "Receiving objects:  50% (1/2)\\rReceiving objects: 100% (2/2)\\r"); c.close();}}), writeStdin: async () => {}, closeStdin: async () => {}, close: async () => {}, wait: async () => failed ? 128 : 0});
     }
     let holdTurn = false;
     const app = new FakeCodexAppServer({resumeAvailable: true,
@@ -98,7 +102,7 @@ export class FakeSandbox extends DurableObject {
       },
     });
     const write = app.process.writeStdin;
-    app.process.writeStdin = async line => {const request = JSON.parse(line); if (request.method === "turn/start") holdTurn = JSON.stringify(request.params).includes("hold-turn"); if (["thread/start", "thread/resume"].includes(request.method)) await this.ctx.storage.put("last-method", request.method); await write(line);};
+    app.process.writeStdin = async line => {const request = JSON.parse(line); if (request.method === "turn/start") holdTurn = JSON.stringify(request.params).includes("hold-turn"); if (["thread/start", "thread/resume"].includes(request.method)) { await this.ctx.storage.put("last-method", request.method); await this.ctx.storage.put("mcp-config", request.params.config.mcp_servers); } await write(line);};
     return new FakeProcess(app.process, line => holdTurn && JSON.parse(line).method === "turn/completed");
   }
   async runProcess(identity, request, ready) {
@@ -111,6 +115,7 @@ export class FakeSandbox extends DurableObject {
   async snapshot() { return {id: "fixture-snapshot", size: 1}; }
   async processCount() { return this.processes.size; }
   async lastMethod() { return await this.ctx.storage.get("last-method"); }
+  async mcpConfig() { return await this.ctx.storage.get("mcp-config"); }
   async stop() { await Promise.all([...this.processes].map(p => p.close())); await this.ctx.storage.put("running", false); }
 
 }
@@ -203,6 +208,67 @@ export {default, ExoSandbox, ExoEgress} from "./implementation.js";`,
           outboundService: {
             type: "fetcher",
             handler: async (request) => {
+              if (new URL(request.url).hostname === "auth.example") {
+                const body = new URLSearchParams(await request.text());
+                assert.equal(body.get("grant_type"), "refresh_token");
+                assert.equal(body.get("refresh_token"), "test-refresh");
+                oauthRefreshes++;
+                return Response.json({
+                  access_token: "synthetic-mcp-key",
+                  refresh_token: "rotated-refresh",
+                  token_type: "Bearer",
+                  expires_in: 3600,
+                });
+              }
+              if (new URL(request.url).hostname === "mcp.example") {
+                assert.equal(
+                  request.headers.get("authorization"),
+                  "Bearer synthetic-mcp-key",
+                );
+                if (request.method === "GET")
+                  return new Response(null, { status: 405 });
+                const body = await request.json();
+                if (body.id === undefined)
+                  return new Response(null, { status: 202 });
+                let result;
+                switch (body.method) {
+                  case "initialize":
+                    result = {
+                      protocolVersion: body.params.protocolVersion,
+                      capabilities: { tools: {} },
+                      serverInfo: { name: "fixture", version: "1.0" },
+                    };
+                    break;
+                  case "tools/list":
+                    result = {
+                      tools: [
+                        {
+                          name: "echo",
+                          description: "Echo text",
+                          inputSchema: {
+                            type: "object",
+                            properties: { text: { type: "string" } },
+                            required: ["text"],
+                          },
+                        },
+                        { name: "blocked", inputSchema: { type: "object" } },
+                      ],
+                    };
+                    break;
+                  case "tools/call":
+                    assert.equal(body.params.name, "echo");
+                    mcpCalls++;
+                    result = {
+                      content: [
+                        { type: "text", text: body.params.arguments.text },
+                      ],
+                    };
+                    break;
+                  default:
+                    throw new Error(`unexpected MCP method: ${body.method}`);
+                }
+                return Response.json({ jsonrpc: "2.0", id: body.id, result });
+              }
               if (
                 new URL(request.url).hostname !== "model.example" ||
                 new URL(request.url).pathname === "/echo"
@@ -254,8 +320,18 @@ export {default, ExoSandbox, ExoEgress} from "./implementation.js";`,
                         id: "fc_test",
                         status: "completed",
                         call_id: "call_test",
-                        name: "shell",
-                        arguments: JSON.stringify({ command: "uname -s" }),
+                        name: body.tools.some(
+                          (t) => t.name === "exo_mcp__fixture__echo",
+                        )
+                          ? "exo_mcp__fixture__echo"
+                          : "shell",
+                        arguments: JSON.stringify(
+                          body.tools.some(
+                            (t) => t.name === "exo_mcp__fixture__echo",
+                          )
+                            ? { text: "MCP works" }
+                            : { command: "uname -s" },
+                        ),
                       },
                     ],
                 usage: {
@@ -373,6 +449,7 @@ async function waitEvents(path, predicate) {
 }
 
 before(async () => {
+  await mkdir(".local", { recursive: true });
   persistence = await mkdtemp(resolve(".local/test-"));
   mf = new Miniflare(await options());
   await mf.ready;
@@ -1115,6 +1192,20 @@ test("sandbox process RPC preserves binary stdin, drains output and cancels proc
   )
     await new Promise((resolve) => setTimeout(resolve, 10));
   assert.equal(await SANDBOXES.getByName(sandbox_id).processCount(), 0);
+  await mf.dispose();
+  mf = new Miniflare(await options());
+  const restored = await rpc({
+    type: "get_sandbox_process_events",
+    scope,
+    query: { sandbox_id, process_id, after: null, limit: null, follow: true },
+  });
+  assert.deepEqual(restored, output);
+  const restoredStatus = await rpc({
+    type: "wait_sandbox_process",
+    scope,
+    request: { sandbox_id, process_id },
+  });
+  assert.deepEqual(restoredStatus, status);
 });
 
 test("existing Rust trait contracts run against the Worker store", async () => {
@@ -1205,4 +1296,150 @@ test("Worker egress substitutes credentials and enforces destination policies", 
     await rpc({ type: "stop_sandbox", scope, sandbox_id });
   }
   await sandbox.stop();
+});
+
+test("MCP uses vault OAuth refresh, shared filtering and basic tool execution", async () => {
+  const vault = await api("vault", "POST", { name: "mcp-test" });
+  await api(`vault/${vault.id}/secret`, "POST", {
+    name: "fixture",
+    policy: policy("https://mcp.example"),
+    secret: {
+      type: "oauth",
+      access_token: "expired-token",
+      refresh_token: "test-refresh",
+      expires_at: 0,
+      refresh: {
+        token_endpoint: "https://auth.example/token",
+        client_id: "test-client",
+        scopes: [],
+        resource: null,
+      },
+    },
+  });
+  const agent = await api("agent", "POST", {
+    slug: `mcp-${crypto.randomUUID()}`,
+    name: "MCP test",
+  });
+  const source = definition(false).replace(
+    "permission_policy:",
+    "mcp_servers:\n  - type: url\n    name: fixture\n    url: https://mcp.example/mcp\n    allowed_tools: [echo]\n    permission_policy: {type: always_allow}\npermission_policy:",
+  );
+  await api(`agent/${agent.id}/artifact`, "POST", {
+    path: "managed-agents/agent.md",
+    contents: [...new TextEncoder().encode(source)],
+  });
+  const before = { calls: mcpCalls, refreshes: oauthRefreshes };
+  const { thread } = await api(`agent/${agent.id}/thread`, "POST", {
+    vaults: [vault.id],
+  });
+  const path = `agent/${agent.id}/thread/${thread.id}`;
+  const turn = await sendTurn(path);
+  const events = await waitTurn(path, turn.turn.id);
+  assert(!events.some((e) => e.data.type === "error"), JSON.stringify(events));
+  const tool = events.find(
+    (e) => e.data.type === "tool_result" && e.data.result?.content,
+  );
+  assert.equal(tool.data.result.content[0].text, "MCP works");
+  assert.equal(mcpCalls, before.calls + 1);
+  assert.equal(oauthRefreshes, before.refreshes + 1);
+  const inventory = events.find((e) => e.data.event_type === "mcp_tools").data
+    .payload;
+  assert.deepEqual(
+    inventory.map((t) => t.name),
+    ["exo_mcp__fixture__echo"],
+  );
+});
+
+test("Codex receives MCP configuration and Git resources through shared sandbox policy", async () => {
+  const vault = await api("vault", "POST", { name: "codex-resources-test" });
+  await api(`vault/${vault.id}/secret`, "POST", {
+    name: "fixture",
+    secret: { type: "key", value: "synthetic-mcp-key" },
+    policy: policy("https://mcp.example"),
+  });
+  await api(`vault/${vault.id}/secret`, "POST", {
+    name: "git",
+    secret: { type: "key", value: "synthetic-git-key" },
+    policy: policy("https://github.com"),
+  });
+  const agent = await api("agent", "POST", {
+    slug: `codex-resources-${crypto.randomUUID()}`,
+    name: "Codex resources",
+  });
+  const source = definition(false)
+    .replace("harness: basic", "harness: codex")
+    .replace(
+      "permission_policy:",
+      "resources:\n  - name: repo\n    type: git_repository\n    url: https://github.com/example/project.git\n    credential: git\n    mount_path: /workspace\nmcp_servers:\n  - type: url\n    name: fixture\n    url: https://mcp.example/mcp\n    blocked_tools: [blocked]\n    permission_policy: {type: always_allow}\npermission_policy:",
+    );
+  await api(`agent/${agent.id}/artifact`, "POST", {
+    path: "managed-agents/agent.md",
+    contents: [...new TextEncoder().encode(source)],
+  });
+  const { thread } = await api(`agent/${agent.id}/thread`, "POST", {
+    vaults: [vault.id],
+  });
+  const path = `agent/${agent.id}/thread/${thread.id}`;
+  const live = await watch(path);
+  const turn = await sendTurn(path);
+  const events = await waitTurn(path, turn.turn.id);
+  await live.collect;
+  const statuses = live.received
+    .filter((event) => event.data.event_type === "runtime_status")
+    .map((event) => event.data.payload.message);
+  assert(
+    statuses.includes("Preparing Git resource github.com/example/project"),
+  );
+  assert(statuses.includes("Downloading github.com/example/project: 100%"));
+  assert(!events.some((e) => e.data.type === "error"), JSON.stringify(events));
+  const { sandboxes } = await api("request", "POST", {
+    kind: "request",
+    id: 1,
+    request: {
+      type: "list_sandboxes",
+      scope: { type: "thread", agent_id: agent.id, thread_id: thread.id },
+    },
+  }).then((r) => r.response);
+  const { SANDBOXES } = await mf.getBindings("exo");
+  const environment = await SANDBOXES.getByName(sandboxes[0].id).environment();
+  assert.match(environment.EXO_GIT_7265706f, /^exo_egress_/);
+  assert(!JSON.stringify(environment).includes("synthetic-git-key"));
+  const { fixture } = await SANDBOXES.getByName(sandboxes[0].id).mcpConfig();
+  assert.equal(fixture.url, "https://mcp.example/mcp");
+  assert.deepEqual(fixture.enabled_tools, ["echo"]);
+  assert.match(environment[fixture.bearer_token_env_var], /^exo_egress_/);
+
+  await api(`agent/${agent.id}/artifact`, "POST", {
+    path: "managed-agents/agent.md",
+    contents: [
+      ...new TextEncoder().encode(
+        source.replace(
+          "github.com/example/project.git",
+          "github.com/example/disk-full.git",
+        ),
+      ),
+    ],
+  });
+  const failed = await api(`agent/${agent.id}/thread`, "POST", {
+    vaults: [vault.id],
+  });
+  const failedPath = `agent/${agent.id}/thread/${failed.thread.id}`;
+  const failedLive = await watch(failedPath);
+  await sendTurn(failedPath);
+  const failedEvents = await waitTurn(failedPath);
+  await failedLive.collect;
+  assert(
+    failedEvents.some(
+      (event) =>
+        event.data.type === "error" &&
+        event.data.message.includes("No space left on device"),
+    ),
+  );
+  assert(
+    failedLive.received.some(
+      (event) =>
+        event.data.type === "error" &&
+        event.data.message.includes("No space left on device"),
+    ),
+  );
 });

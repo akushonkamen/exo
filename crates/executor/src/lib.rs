@@ -17,6 +17,9 @@ mod harness_executor;
 mod harness_helpers;
 mod harness_types;
 pub mod managed_agents;
+pub mod managed_mcp;
+mod mcp;
+pub use mcp::McpToolRuntime;
 mod mcp_types;
 mod message_history;
 mod model_config;
@@ -29,6 +32,7 @@ pub use exoharness::runtime_host;
 pub use exoharness::turn_coordinator::TurnOptions;
 pub use harness_executor::TurnWork;
 pub mod sandbox_policy;
+mod sandbox_resources;
 mod shared;
 
 pub use executor_types::{

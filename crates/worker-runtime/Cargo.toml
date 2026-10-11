@@ -13,11 +13,13 @@ anyhow.workspace = true
 async-trait.workspace = true
 serde_bytes = "0.11.19"
 cost = { path = "../cost" }
+exo-mcp = { path = "../mcp", default-features = false }
 executor = { path = "../executor", default-features = false }
 exo-managed-agents = { path = "../managed-agents", default-features = false }
 exoharness = { path = "../exoharness", features = ["store"] }
 futures.workspace = true
 http = "1"
+oauth2.workspace = true
 lingua.workspace = true
 serde.workspace = true
 serde_json.workspace = true

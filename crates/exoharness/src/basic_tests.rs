@@ -1833,6 +1833,40 @@ async fn basic_backend_exposes_process_events_and_input() {
         Some(SandboxProcessEvent::Exit { exit_code: 0, .. })
     ));
 
+    let restarted = BasicExoHarness::new(local_test_config(tempdir.path()))
+        .await
+        .expect("restart harness");
+    let restored = restarted
+        .get_agent(&agent.record().id)
+        .await
+        .expect("agent lookup")
+        .expect("saved agent")
+        .get_thread(&conversation.record().id)
+        .await
+        .expect("thread lookup")
+        .expect("saved thread");
+    let restored_events = restored
+        .get_sandbox_process_events(SandboxProcessEventQuery {
+            sandbox_id: sandbox_id.clone(),
+            process_id: process.id.clone(),
+            after: None,
+            limit: None,
+            follow: Some(true),
+        })
+        .await
+        .expect("completed output survives restart");
+    assert_eq!(restored_events, events);
+    assert_eq!(
+        restored
+            .wait_sandbox_process(WaitSandboxProcessRequest {
+                sandbox_id: sandbox_id.clone(),
+                process_id: process.id.clone(),
+            })
+            .await
+            .expect("completed status survives restart"),
+        status
+    );
+
     let conversation_events = conversation
         .get_events(None)
         .await

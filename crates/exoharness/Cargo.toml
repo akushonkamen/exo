@@ -10,6 +10,7 @@ default = []
 smolvm = ["basic-backend", "dep:smolmachines"]
 http-client = ["dep:reqwest"]
 store = [
+  "dep:oauth2",
   "dep:aes-gcm",
   "dep:tokio",
   "dep:tokio-stream",
@@ -40,7 +41,8 @@ basic-backend = [
   "dep:actix-web",
   "dep:base64",
   "dep:object_store",
-  "dep:oauth2",
+  "oauth2/reqwest",
+  "oauth2/rustls-tls",
   "dep:tokio",
   "dep:tokio-stream",
   "dep:tokio-tungstenite",

@@ -542,6 +542,12 @@ impl Runtime {
         if !recovering && thread.activate_caller().await? {
             provider.executor.reset_thread(thread.record().id).await?;
         }
+        let preparing_key = HarnessTurnKey::new(agent.record().id, thread.record().id, record.id);
+        let progress = |message| {
+            provider
+                .turns
+                .broadcast(preparing_key, Ok(ExecutionStreamEvent::Status { message }));
+        };
         let TurnWork {
             request,
             streaming,
@@ -557,7 +563,7 @@ impl Runtime {
             }
             if !thread_config.resources.is_empty() {
                 thread_config
-                    .materialize_resources(thread.as_ref(), &agent_config)
+                    .materialize_resources_with_progress(thread.as_ref(), &agent_config, &progress)
                     .await?;
                 let mut locations = String::from("Filesystem resources for this thread:\n");
                 for resource in &thread_config.resources {
@@ -576,6 +582,18 @@ impl Runtime {
                     .push(crate::harness_helpers::system_message(&locations));
             }
         }
+        if recovering
+            && !thread_config.resources.is_empty()
+            && !exoharness::resources::uses_host_resource_mounts(
+                &thread_config.effective_sandbox_provider(&agent_config),
+            )
+        {
+            // Remote preparation may have been interrupted before the harness
+            // started. Its sandbox-local marker makes completion idempotent.
+            thread_config
+                .materialize_resources_with_progress(thread.as_ref(), &agent_config, &progress)
+                .await?;
+        }
         #[cfg(feature = "native")]
         if let Some(previews) = self
             .register_previews(agent.as_ref(), thread.clone())
@@ -587,6 +605,7 @@ impl Runtime {
                     &previews.instructions(),
                 ));
         }
+        progress("Preparing agent".into());
         provider
             .executor
             .prepare_conversation(
@@ -652,6 +671,7 @@ impl Runtime {
             }
         }
         let completion_thread = Arc::clone(&thread);
+        progress("Waiting for model".into());
         let submission = provider
             .harness
             .submit(HarnessCommand::StartTurn(ExecutorTurn {

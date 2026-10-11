@@ -4,6 +4,7 @@ mod account;
 mod execution;
 mod host;
 mod http;
+mod mcp;
 mod operations;
 mod policy;
 mod sandbox;
@@ -14,14 +15,14 @@ use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll};
 
-use executor::{BasicExecutor, LocalProvider, Runtime};
+use executor::{LocalProvider, Runtime};
 use futures::future::{AbortHandle, Abortable};
 use futures::stream::FuturesUnordered;
 use futures::{Stream, future::BoxFuture, task::waker};
 use serde::Serialize;
 use wasm_bindgen::prelude::*;
 
-use execution::{WorkerExecutor, WorkerModel, WorkerTools};
+use execution::WorkerExecutor;
 use host::{Host, HostCall, HostStorage};
 
 #[derive(Serialize)]
@@ -96,6 +97,7 @@ impl WorkerRuntime {
                     key,
                     backends,
                     host.clone(),
+                    Some(Arc::new(host::WorkerOAuthHttpClient(host.clone()))),
                 )
                 .map_err(js_error)?,
             )
@@ -109,11 +111,7 @@ impl WorkerRuntime {
             state: state.clone(),
             sandbox_default,
             harnesses: Mutex::default(),
-            basic: BasicExecutor::with_pricing(
-                Arc::new(WorkerModel(host.clone())),
-                Arc::new(WorkerTools),
-                Arc::new(cost::PricingTable::empty()),
-            ),
+            mcp: Arc::new(mcp::WorkerMcp::new(host.clone())),
             coordinator: coordinator.clone(),
         });
         let runtime = Runtime::with_tracer(

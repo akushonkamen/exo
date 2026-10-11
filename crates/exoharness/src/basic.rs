@@ -251,6 +251,7 @@ impl BasicExoHarness {
         master_key: [u8; 32],
         backends: Vec<SandboxBackendRegistration>,
         host: Arc<dyn crate::runtime_host::RuntimeHost>,
+        oauth: Option<Arc<dyn crate::vault::OAuthHttpClient>>,
     ) -> Result<Self> {
         let mut registry = HashMap::new();
         for backend in backends {
@@ -269,7 +270,12 @@ impl BasicExoHarness {
             inner: Arc::new(BasicExoHarnessInner {
                 turn_queue_locks: Arc::default(),
                 access_policy: Default::default(),
-                vaults: BasicVaultStore::hosted(storage.clone(), cipher.clone()),
+                vaults: BasicVaultStore::hosted(
+                    storage.clone(),
+                    cipher.clone(),
+                    host.clone(),
+                    oauth,
+                ),
                 storage,
                 write_lock: AsyncMutex::new(()),
                 resource_locks: Mutex::default(),
@@ -914,11 +920,21 @@ impl AgentHandle for BasicAgentHandle {
                     agent_id: self.record.id,
                 })
                 .await?;
-            anyhow::ensure!(
-                resources.is_empty(),
-                "this host does not support filesystem resources"
-            );
-            Ok(Vec::new())
+            crate::resources::validate_resources(&resources)?;
+            let prepared = resources
+                .into_iter()
+                .map(|definition| crate::resources::PreparedResource {
+                    definition,
+                    snapshot: None,
+                })
+                .collect::<Vec<_>>();
+            crate::resources::validate_sandbox_resources(&prepared)?;
+            if !prepared.is_empty()
+                && let Some(caller) = &self.harness.caller
+            {
+                caller.policy.check_operator(&caller.principal).await?;
+            }
+            Ok(prepared)
         }
     }
 

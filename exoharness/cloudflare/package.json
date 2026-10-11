@@ -14,7 +14,9 @@
     "build:runtime": "node scripts/build-runtime.mjs",
     "test:live:contracts": "node scripts/live-contract-test.mjs"
   },
-  "dependencies": {},
+  "dependencies": {
+    "@modelcontextprotocol/client": "2.3.1"
+  },
   "devDependencies": {
     "@cloudflare/workers-types": "5.20261004.1",
     "@types/node": "25.5.0",
