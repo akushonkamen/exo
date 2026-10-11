@@ -199,6 +199,24 @@
       [data-surface].out {
         opacity: 0;
       }
+      /* Whole lines also open and close their space: arriving lines open
+         first and then fade in; leaving lines fade out and then close. */
+      pre span.l[data-surface] {
+        max-height: 1.7em;
+        overflow: hidden;
+        transition:
+          max-height 0.35s ease,
+          opacity 0.3s ease 0.3s;
+      }
+      pre span.l[data-surface].out {
+        max-height: 0;
+        transition:
+          opacity 0.2s ease,
+          max-height 0.35s ease 0.15s;
+      }
+      pre span.l[data-surface].out::before {
+        counter-increment: none;
+      }
       [data-surface].off {
         display: none;
       }
@@ -499,40 +517,60 @@
           );
         }
       };
+      let switches = 0;
       const show = (next) => {
         if (next === surface) {
           return;
         }
-        const previous = surface;
         surface = next;
         press();
+        // Based on what's on screen, so a quick second click mid-switch
+        // picks up from wherever the first one got to.
+        const switching = ++switches;
         const leaving = [...parts].filter(
-          (part) => shows(part, previous) && !shows(part, next),
+          (part) => !part.classList.contains("off") && !shows(part, next),
         );
         const arriving = [...parts].filter(
-          (part) => !shows(part, previous) && shows(part, next),
+          (part) =>
+            shows(part, next) &&
+            (part.classList.contains("off") || part.classList.contains("out")),
         );
         for (const part of leaving) {
           part.classList.add("out");
         }
-        setTimeout(
-          () => {
-            for (const part of leaving) {
-              part.classList.add("off");
-              part.classList.remove("out");
-            }
-            for (const part of arriving) {
-              part.classList.add("out");
-              part.classList.remove("off");
-            }
-            // Flush layout so the arriving pieces fade in from transparent.
-            document.body.getBoundingClientRect();
-            for (const part of arriving) {
-              part.classList.remove("out");
-            }
-          },
-          leaving.length && !still ? 300 : 0,
-        );
+        // Whole lines (frontmatter) don't share space with anything leaving,
+        // so they start opening right away. Inline command pieces wait for
+        // the leaving ones to fade, so old and new text never overlap.
+        const isLine = (part) => part.classList.contains("l");
+        const reveal = (pieces) => {
+          for (const part of pieces) {
+            part.classList.add("out");
+            part.classList.remove("off");
+          }
+          // Flush layout so the pieces animate from their hidden state.
+          document.body.getBoundingClientRect();
+          for (const part of pieces) {
+            part.classList.remove("out");
+          }
+        };
+        reveal(arriving.filter(isLine));
+        const wait = still
+          ? 0
+          : leaving.some(isLine)
+            ? 500
+            : leaving.length
+              ? 300
+              : 0;
+        setTimeout(() => {
+          if (switching !== switches) {
+            return;
+          }
+          for (const part of leaving) {
+            part.classList.add("off");
+            part.classList.remove("out");
+          }
+          reveal(arriving.filter((part) => !isLine(part)));
+        }, wait);
       };
       for (const choice of choices) {
         choice.addEventListener("click", () => {
