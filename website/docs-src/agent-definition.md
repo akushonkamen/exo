@@ -501,6 +501,9 @@ to run your agents; moving existing agents and threads between providers require
 
 ## Planned additions
 
+- [ ] Take the agent file as a positional argument in `exo agent create FILE` and `exo agent update FILE`, and resolve
+  the agent's name from `--name`, then an optional frontmatter `name:`, then the file's stem, for `exo run` too. The slug
+  derives from the name, with no path hash.
 - [ ] Simplify the HTTP API. When `exo run FILE --serve` serves a single agent, expose agent-less routes:
   `POST /exo/turn` creates a thread and returns its ID in the receipt, and `/exo/thread/THREAD/...` addresses existing
   threads. Accept a plain string `input` as shorthand for a user message, so
