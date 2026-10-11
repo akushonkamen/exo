@@ -1,7 +1,7 @@
 ---
 harness: basic
-config:
-  model: gpt-5.5
+model:
+  name: gpt-6.1-sol
   credential: openai
 ---
 

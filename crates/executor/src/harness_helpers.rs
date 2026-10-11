@@ -202,7 +202,7 @@ pub(crate) async fn model_credential(
     let name = config
         .credential
         .as_deref()
-        .context("agent config.credential must name a credential in a selected vault")?;
+        .context("agent model.credential must name a credential in a selected vault")?;
     exoharness::vault::find_secret(conversation, name)
         .await?
         .with_context(|| format!("model credential {name:?} was not found in the selected vaults"))

@@ -8,6 +8,7 @@ description: Talk to your agent, give it a real task, and teach it who you are.
 
 ::: warning Archived documentation
 This page describes the earlier Exo self-agent or older APIs and may be out of date. See the [current docs](/).
+These pages use older CLI and configuration syntax. The current local state directory is `~/.exo`; managed agents use `thread fork --up-to` rather than the older clone, rewind, or migrate commands.
 :::
 
 After [setup](installation) you have two ways to talk to your agent:

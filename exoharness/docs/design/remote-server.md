@@ -6,11 +6,11 @@ Run the complete Exo provider over HTTP with OIDC login, private vaults, and opt
 
 One Exo server supports personal access from multiple devices and shared access for a team. Admission and sharing are separate settings.
 
-| Deployment                | Who can log in                 | Agents and threads                                   | Vaults                                                     |
-| ------------------------- | ------------------------------ | ---------------------------------------------------- | ---------------------------------------------------------- |
-| Personal                  | The configured owner           | Private to the owner, available on all their devices | The owner's personal vault                                 |
-| Team                      | Explicitly admitted identities | Private to their creators by default                 | One personal vault per identity                            |
-| Team with `--multiplayer` | The same admitted identities   | Shared among admitted users                          | Personal vaults remain private; shared vaults are explicit |
+| Deployment                | Who can log in                 | Agents and threads                                   | Vaults                                                                          |
+| ------------------------- | ------------------------------ | ---------------------------------------------------- | ------------------------------------------------------------------------------- |
+| Personal                  | The configured owner           | Private to the owner, available on all their devices | Shared `global` plus the owner's personal vault                                 |
+| Team                      | Explicitly admitted identities | Private to their creators by default                 | Shared `global` plus one personal vault per identity                            |
+| Team with `--multiplayer` | The same admitted identities   | Shared among admitted users                          | Shared `global`; personal vaults stay private; other shared vaults are explicit |
 
 Multiplayer shares conversation history, artifacts, and thread files. It does not grant access to another user's credentials. This is a server for trusted members with private data by default, not a hostile multi-tenant hosting service.
 
@@ -143,7 +143,7 @@ Server command, run from the same directory as the vault import:
 exo serve --auth-file ./server-auth.yaml
 ```
 
-Use the same `--root` on vault and serve commands if choosing a state directory other than `.exo`. A named local provider is only a convenience for saving that path.
+Use the same `--root` on vault and serve commands if choosing a state directory other than `~/.exo`. A named local provider is only a convenience for saving that path.
 
 Validate the required auth settings and resolve the client-secret reference before accepting requests. Report missing settings or inaccessible secrets directly, and print the expected Google callback URL at startup.
 
@@ -169,15 +169,15 @@ Persist a small record in the server's existing state:
 
 - After authentication and admission succeed, atomically look up or create the principal and its personal vault. Concurrent first logins must not create duplicate vaults.
 - Returning users and additional devices reuse the same association. Display the default vault as `personal`; its stored ID is the authority, not its display name.
-- Existing local vaults remain owned by the configured server owner and keep their IDs. They are available for explicit attachment; they are not automatically attached. Rebinding a personal vault to a different existing vault remains a local-operator follow-up.
+- Existing local vaults remain owned by the configured server owner and keep their IDs. `global` is automatically inherited by every thread; other local vaults require explicit attachment. Rebinding a personal vault to a different existing vault remains a local-operator follow-up.
 - New personal vaults start empty. Users add model credentials or connect MCP services once, using the existing vault/OAuth flow.
-- Additional vaults created by a user belong to that principal. Optional `shared_vaults: [team]` in the auth config grants use to admitted users; only the owner manages their credentials. Shared vaults must be explicitly attached, and their credentials must have an HTTP or MCP destination to be used by another principal. Raw secret reads and credential management remain with the owner. Auth and personal vaults cannot be shared.
+- Additional vaults created by a user belong to that principal. Optional `shared_vaults: [team]` in the auth config grants use to admitted users; only the owner manages their credentials. Other shared vaults must be explicitly attached, and their credentials must have an HTTP or MCP destination to be used by another principal. Raw secret reads and credential management remain with the owner. Auth and personal vaults cannot be shared.
 
-Authentication produces a caller-scoped `VaultContext` containing the personal vault and explicitly granted shared vaults. Attachments and persisted secret references must be checked against that context on every use. A client-supplied vault ID, a shared agent, or a saved thread is not an authorization grant.
+Authentication produces a caller-scoped `VaultContext` containing the shared server-wide `global` vault, the personal vault, and explicitly attached permitted vaults. Personal credentials take precedence over `global`, and explicit attachments take precedence over both. Attachments and persisted secret references must be checked against that context on every use. A client-supplied vault ID, a shared agent, or a saved thread is not an authorization grant.
 
 Keep `VaultHandle`, secret IDs, encryption, OAuth refresh, destination checks, rotation, revocation, and credential substitution as the implementation. Custom providers and external vault backends can supply their own principal-to-context mapping.
 
-Existing local state needs an explicit owner assignment when enabling auth. Preserve vault/agent/thread IDs and account aliases; make the assignment restart-safe. Do not expose an existing local `global` vault to newly admitted users by default.
+Existing local state needs an explicit owner assignment when enabling auth. Preserve vault/agent/thread IDs and account aliases; make the assignment restart-safe. The server-wide `global` vault is shared with all admitted users for credential use; writes and raw secret reads stay with its owner. Store authentication secrets in a separate operator-only vault.
 
 ## Private and multiplayer execution
 

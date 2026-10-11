@@ -17,7 +17,7 @@ use std::sync::Arc;
 use tempfile::TempDir;
 
 const SOURCE: &str =
-    "---\nharness: basic\nconfig:\n  model: gpt-5.4\n---\n\nInvestigate support tickets.\n";
+    "---\nharness: basic\nmodel:\n  name: gpt-5.4\n---\n\nInvestigate support tickets.\n";
 
 #[test]
 fn sandbox_provider_keeps_the_harness_preset_image() -> Result<()> {
@@ -769,7 +769,7 @@ async fn git_resources_require_a_selected_vault_and_matching_origin() -> Result<
             ..Default::default()
         },
     )?;
-    let definition = AgentDefinition::parse(SOURCE.replace("config:\n", "resources:\n  - name: code\n    type: git_repository\n    url: https://github.com/exoharness/exo\n    credential: github\n    mount_path: /workspace\nconfig:\n"))?;
+    let definition = AgentDefinition::parse(SOURCE.replace("model:\n", "resources:\n  - name: code\n    type: git\n    url: https://github.com/exoharness/exo\n    credential: github\n    mount_path: /workspace\nmodel:\n"))?;
     let agent = runtime
         .create_managed_agent(&definition, "private-code", "private-code")
         .await?;

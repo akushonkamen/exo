@@ -8,6 +8,7 @@ description: One setup script to a running agent.
 
 ::: warning Archived documentation
 This page describes the earlier Exo self-agent or older APIs and may be out of date. See the [current docs](/).
+These pages use older CLI and configuration syntax. The current local state directory is `~/.exo`; managed agents use `thread fork --up-to` rather than the older clone, rewind, or migrate commands.
 :::
 
 ## Prerequisites
@@ -34,7 +35,7 @@ everything:
 
 1. Clones the repository and builds the `exo` CLI.
 2. Asks for your OpenAI API key (stored in a `.env` file with `600`
-   permissions, then registered in exo's secret store).
+   permissions, then registered in Exo's secret store).
 3. Asks for your name and your agent's name, and writes a local profile at
    `.exo/exo-profile.md` (git-ignored — machine-specific instructions
    live here).
@@ -69,6 +70,6 @@ and start a bare REPL, and run `pnpm install` if you'll use TypeScript
 harnesses.
 
 ::: info
-  Hacking on exo itself? Use a debug build: `cargo build -p exo`, then invoke
+  Hacking on Exo itself? Use a debug build: `cargo build -p exo`, then invoke
   it as `./target/debug/exo`.
 :::

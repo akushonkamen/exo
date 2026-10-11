@@ -249,7 +249,7 @@ export async function resolveModel(
   const name = context.agentConfig.credential;
   if (!name) {
     throw new Error(
-      "agent config.credential must name a credential in a selected vault",
+      "agent model.credential must name a credential in a selected vault",
     );
   }
   const idText = name.replace(/^urn:uuid:/i, "").replace(/^\{(.*)\}$/, "$1");

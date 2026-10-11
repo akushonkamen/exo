@@ -8,6 +8,7 @@ description: Supervised connections that receive external events and wake conver
 
 ::: warning Archived documentation
 This page describes the earlier Exo self-agent or older APIs and may be out of date. See the [current docs](/).
+These pages use older CLI and configuration syntax. The current local state directory is `~/.exo`; managed agents use `thread fork --up-to` rather than the older clone, rewind, or migrate commands.
 :::
 
 Adapters are long-running, host-managed bridges to external systems that let an
@@ -104,7 +105,7 @@ registries and signed distribution are also outside the current plan.
 The general recipe:
 
 1. **Store credentials as a secret.** Adapter configs never contain raw
-   tokens — they reference [secrets](/concepts/bindings-and-secrets) by name:
+   tokens — they reference [secrets](/architecture/vaults) by name:
 
    ```bash
    export DISCORD_BOT_TOKEN="..."

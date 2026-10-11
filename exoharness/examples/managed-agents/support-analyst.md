@@ -1,7 +1,7 @@
 ---
 harness: codex
-config:
-  model: gpt-5.6-sol
+model:
+  name: gpt-6.1-sol
   credential: openai
 ---
 

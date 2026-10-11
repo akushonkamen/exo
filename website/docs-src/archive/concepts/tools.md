@@ -8,6 +8,7 @@ description: Trusted functions the harness exposes to the model during a turn.
 
 ::: warning Archived documentation
 This page describes the earlier Exo self-agent or older APIs and may be out of date. See the [current docs](/).
+These pages use older CLI and configuration syntax. The current local state directory is `~/.exo`; managed agents use `thread fork --up-to` rather than the older clone, rewind, or migrate commands.
 :::
 
 A **tool** is a function the model calls during an active turn. The harness

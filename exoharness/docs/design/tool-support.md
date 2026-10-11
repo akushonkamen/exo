@@ -1034,8 +1034,8 @@ external network call:
 cat > irc-agent.md <<'EOF'
 ---
 harness: basic
-config:
-  model: gpt-5.4
+model:
+  name: gpt-5.4
   credential: openai
 ---
 Help the user with their task.

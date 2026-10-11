@@ -278,7 +278,7 @@ mod tests {
             )?,
             None,
         ));
-        let source = "---\nharness: basic\nconfig:\n  model: test\nadapters: [inbox]\n---\nHandle incoming messages.";
+        let source = "---\nharness: basic\nmodel:\n  name: test\nadapters: [inbox]\n---\nHandle incoming messages.";
         let definition = exo_managed_agents::AgentDefinition::parse(source.into())?;
         let agent = runtime
             .create_managed_agent(&definition, "worker", "worker")

@@ -1,20 +1,20 @@
 ---
-title: Vaults and credentials
+title: Vaults
 description: Credential presets, OAuth, per-user vaults, destination policies, and substitution.
 ---
 
-# Vaults and credentials
-
-::: warning Under construction
-These docs are still being written, and some documented features are still being implemented. See [Planned additions](/agent-definition#planned-additions).
-:::
+# Vaults
 
 A **vault** is a named collection of secrets, such as API keys and OAuth credentials, stored safely at rest. Each secret
 has a name and a policy describing where it can be used.
 
-With the local provider, threads inherit the `global` vault, vaults attached to their agent, and any explicitly attached vaults.
-When multiple vaults contain a matching credential, the more specifically attached vault takes precedence. With remote
-providers, the thread automatically uses the authenticated user's vaults.
+Every thread inherits `global`. On an authenticated server, this is one server-wide shared vault; its owner controls writes.
+Threads also inherit the signed-in user's `personal` vault, and you can explicitly attach other vaults to a thread.
+When multiple vaults contain a matching credential, personal credentials take precedence over `global`, and explicitly
+attached vaults take precedence over both. Later attachments take precedence over earlier ones.
+
+Secret values are encrypted on disk under the runtime's state directory. On macOS, Exo keeps the encryption master key
+in Keychain; it doesn't store each secret value there.
 
 Missing model credentials fail instead of falling back to host API keys.
 
@@ -55,6 +55,9 @@ It creates a secret named `github`. With `GITHUB_PAT` set, you can import a toke
 exo vault secret create global --preset github --token-env GITHUB_PAT
 ```
 
+Git resources select this credential explicitly with `credential: github`; it isn't inferred from the repository URL.
+Public repositories can be cloned without it. See [Resources](../agent-definition#resources).
+
 For an MCP server that supports OAuth, you can log in using its resource URL:
 
 ```bash
@@ -77,7 +80,7 @@ exo vault create bob
 exo vault secret create bob --preset github --token-env BOB_GITHUB_PAT
 ```
 
-Select the user's vault when creating their thread:
+After [saving an agent](../agent-definition#saved-agents) as `support-analyst`, select the user's vault when creating their thread:
 
 ```bash
 exo agent run --agent support-analyst --vault alice
@@ -85,7 +88,7 @@ exo agent run --agent support-analyst --vault bob
 ```
 
 Both vaults contain a secret named `github`, so the agent definition stays the same. Each thread uses its selected vault's
-credential, which takes precedence over a shared credential with the same name. Shared credentials, eg. a model API key,
+credential, which takes precedence over a shared credential with the same name. Shared credentials, e.g. a model API key,
 can still come from `global`.
 
 Vaults stay attached when you resume a thread. You can repeat `--vault` to attach multiple vaults, or add another vault when
@@ -107,6 +110,11 @@ Unrestricted networking still respects each secret's policy.
 
 Agents get placeholder credentials like `OPENAI_API_KEY=exo_egress_d81f72ff9a6b4ff2bd4e1bae63c207b0`. Exo substitutes the real
 credential outside of the sandbox, on requests to permitted destinations. This lets the agent use a credential without being
-able to read its value. MCP connections use credentials outside the sandbox as well.
+able to read its value.
+
+Codex and Claude Code run their native MCP clients inside the sandbox. These clients also receive placeholders, with
+substitution performed by the egress proxy. Credential-bearing MCP connections must use HTTPS on port 443, and the MCP
+host must be allowed by the environment's network policy. This requires a provider supporting substitution, currently
+SmolVM or Firecracker. Harnesses using a host-side MCP client make their MCP requests outside the sandbox instead.
 
 Vault values remain in the runtime; rotation and revocation apply to subsequent requests.

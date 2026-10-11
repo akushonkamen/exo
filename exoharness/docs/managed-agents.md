@@ -6,8 +6,8 @@ Agents use Exo's local state and sandbox providers.
 ```markdown
 ---
 harness: codex
-config:
-  model: gpt-5.6-sol
+model:
+  name: gpt-6.1-sol
   credential: openai
 ---
 
@@ -16,7 +16,7 @@ Read the available evidence, cite the tickets behind each finding, and
 write your report to a file.
 ```
 
-`harness` and `config.model` are required. The body supplies the agent's
+`harness` and `model.name` are required. The body supplies the agent's
 instructions. Unsupported fields are rejected so a typo or an unimplemented
 feature doesn't silently change how the agent runs.
 
@@ -60,8 +60,8 @@ exo vault secret create global openai --token-env OPENAI_API_KEY --allow-origin 
 ```
 
 `OPENAI_API_KEY` must already be set. `--token-env` takes the variable's name.
-Set `config.model` to the upstream model name and `config.credential` to a secret
-name or ID in a selected vault. Set `config.base_url` for a custom endpoint.
+Set `model.name` to the upstream model name and `model.credential` to a secret
+name or ID in a selected vault. Set `model.base_url` for a custom endpoint.
 There is no model registration or fallback to another model. `--model` overrides
 the model name for the thread and keeps its credential and endpoint.
 
@@ -125,7 +125,7 @@ resolving to your tunnel and forward the printed port with
 A `502` means the sandbox or service is unavailable. Start it and check its logs.
 If the UI works but API or WebSocket requests fail, configure their browser URLs
 and allow the full frontend origin in CORS, including the port.
-For other TCP protocols, use `exo thread sandbox forward AGENT THREAD --port PORT`;
+For other TCP protocols, use `exo sandbox forward AGENT THREAD --port PORT`;
 `--bind 127.0.0.1:LOCAL_PORT` selects the local port, and Ctrl-C stops forwarding.
 
 ### Named agents and threads
@@ -215,9 +215,9 @@ threads and restores the previous spec if the provider rejects the update.
 `exo agent get NAME` shows the saved spec and resolved harness configuration.
 
 Declare TypeScript tool modules in `tools: [./tools.ts]`; their paths follow the
-same resolution rules as harness modules. Optional `config.braintrust` retains
+same resolution rules as harness modules. Optional `model.braintrust` retains
 tracing settings (`org_name` and `project: {kind: name, value: PROJECT}`). `tool_creation: true` enables the
-harness's agent-authored tool support. For `harness: exo`, set `config.module`
+harness's agent-authored tool support. For `harness: exo`, set `model.module`
 to the Exo harness module. Sandbox configuration, including the image, belongs
 in an environment definition, not the agent file.
 
@@ -600,7 +600,7 @@ Revoked secrets fail instead of switching to another account. Agent and thread
 records retain vault references, not copies of secret values.
 
 Store a model credential in the global vault, then name it in the agent's
-`config.credential`:
+`model.credential`:
 
 ```bash
 exo vault secret create global openai --token-env OPENAI_API_KEY --allow-origin https://api.openai.com

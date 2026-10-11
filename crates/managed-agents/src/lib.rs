@@ -32,8 +32,7 @@ pub struct AgentFrontmatter {
     #[serde(default, rename = "name")]
     _legacy_name: Option<String>,
     pub harness: String,
-    #[serde(alias = "model")]
-    pub config: AgentModelConfig,
+    pub model: AgentModelConfig,
     #[serde(default)]
     pub permission_policy: permissions::PermissionPolicy,
     #[serde(default)]
@@ -53,8 +52,7 @@ pub struct AgentFrontmatter {
 pub struct AgentModelConfig {
     pub braintrust: Option<BraintrustTracingConfig>,
     pub module: Option<PathBuf>,
-    #[serde(alias = "name")]
-    pub model: String,
+    pub name: String,
     pub credential: Option<String>,
     pub base_url: Option<String>,
     pub reasoning_effort: Option<String>,
@@ -93,7 +91,7 @@ impl AgentDefinition {
         let instructions = contents[body_start..].trim().to_string();
         for (field, value) in [
             ("harness", frontmatter.harness.as_str()),
-            ("model.name", frontmatter.config.model.as_str()),
+            ("model.name", frontmatter.model.name.as_str()),
             ("instructions", instructions.as_str()),
         ] {
             if value.trim().is_empty() {

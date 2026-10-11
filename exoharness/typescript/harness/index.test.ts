@@ -1652,5 +1652,5 @@ it("resolves model credentials from attached vaults without shadowing IDs or ign
     "not found in the selected vaults",
   );
   context.agentConfig.credential = null;
-  await expect(resolveModel(context)).rejects.toThrow("config.credential");
+  await expect(resolveModel(context)).rejects.toThrow("model.credential");
 });

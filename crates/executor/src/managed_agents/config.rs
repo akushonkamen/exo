@@ -149,7 +149,7 @@ fn resolve_harness(
         "rlm" => (AgentHarnessKind::Rlm, None),
         "typescript" | "exo" => {
             let path = configured_module
-                .with_context(|| format!("{harness} agents require config.module"))?;
+                .with_context(|| format!("{harness} agents require model.module"))?;
             let path = modules
                 .resolve(path)
                 .with_context(|| format!("resolving harness module {}", path.display()))?;
@@ -292,7 +292,7 @@ pub fn agent_config_with_modules(
         },
         definition
             .frontmatter
-            .config
+            .model
             .module
             .as_deref()
             .map(|path| base.join(path))
@@ -323,11 +323,11 @@ pub fn agent_config_with_modules(
             })
             .collect::<Result<_>>()?;
     }
-    let model = model.unwrap_or(&definition.frontmatter.config.model);
+    let model = model.unwrap_or(&definition.frontmatter.model.name);
     if model.trim().is_empty() {
         bail!("model must not be empty");
     }
-    if let Some(effort) = definition.frontmatter.config.reasoning_effort.as_deref() {
+    if let Some(effort) = definition.frontmatter.model.reasoning_effort.as_deref() {
         if preset != Some(TypeScriptHarnessPreset::Codex) {
             bail!("model.reasoning_effort is only supported by the codex harness");
         }
@@ -352,11 +352,11 @@ pub fn agent_config_with_modules(
             enable_networking: true,
         },
         model: model.into(),
-        credential: definition.frontmatter.config.credential.clone(),
-        base_url: definition.frontmatter.config.base_url.clone(),
-        reasoning_effort: definition.frontmatter.config.reasoning_effort.clone(),
-        max_output_tokens: definition.frontmatter.config.max_output_tokens,
-        max_tool_round_trips: definition.frontmatter.config.max_tool_round_trips,
-        braintrust: definition.frontmatter.config.braintrust.clone(),
+        credential: definition.frontmatter.model.credential.clone(),
+        base_url: definition.frontmatter.model.base_url.clone(),
+        reasoning_effort: definition.frontmatter.model.reasoning_effort.clone(),
+        max_output_tokens: definition.frontmatter.model.max_output_tokens,
+        max_tool_round_trips: definition.frontmatter.model.max_tool_round_trips,
+        braintrust: definition.frontmatter.model.braintrust.clone(),
     })
 }

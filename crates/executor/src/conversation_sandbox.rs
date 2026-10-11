@@ -416,7 +416,7 @@ mod tests {
             })
             .await?;
         let definition = exo_managed_agents::AgentDefinition::parse(
-            "---\nname: previews\nharness: basic\nconfig:\n  model: test\n---\nUse tools.".into(),
+            "---\nname: previews\nharness: basic\nmodel:\n  name: test\n---\nUse tools.".into(),
         )?;
         let agent_config = crate::managed_agents::agent_config(
             &definition,
@@ -458,7 +458,7 @@ mod tests {
         let agent = exoharness::test_support::new_test_agent(&harness, "ports").await?;
         let thread = agent.new_thread(Default::default()).await?;
         let definition = exo_managed_agents::AgentDefinition::parse(
-            "---\nname: ports\nharness: basic\nconfig:\n  model: test\n---\nUse tools.".into(),
+            "---\nname: ports\nharness: basic\nmodel:\n  name: test\n---\nUse tools.".into(),
         )?;
         let agent_config = crate::managed_agents::agent_config(
             &definition,
@@ -544,7 +544,7 @@ mod tests {
         let unattached = agent.new_thread(Default::default()).await?;
         let thread = unattached.attach_vaults(vec![vault.record().id]).await?;
         for (harness_name, model, variable, host) in [
-            ("codex", "gpt-5.6-sol", "OPENAI_API_KEY", "api.openai.com"),
+            ("codex", "gpt-6.1-sol", "OPENAI_API_KEY", "api.openai.com"),
             (
                 "claude-code",
                 "claude-sonnet-4-6",
@@ -559,7 +559,7 @@ mod tests {
             ),
         ] {
             let definition = exo_managed_agents::AgentDefinition::parse(format!(
-                "---\nharness: {harness_name}\nconfig:\n  model: {model}\n  credential: {harness_name}\n---\nHelp."
+                "---\nharness: {harness_name}\nmodel:\n  name: {model}\n  credential: {harness_name}\n---\nHelp."
             ))?;
             let mut agent_config = crate::managed_agents::agent_config(
                 &definition,
@@ -666,7 +666,7 @@ mod tests {
             .await?;
         let thread = agent.new_thread(NewThreadRequest::default()).await?;
         let definition = exo_managed_agents::AgentDefinition::parse(
-            "---\nharness: basic\nconfig:\n  model: test\n---\nUse tools.".into(),
+            "---\nharness: basic\nmodel:\n  name: test\n---\nUse tools.".into(),
         )?;
         let mut agent_config =
             crate::managed_agents::agent_config(&definition, SandboxProvider::Docker, None, None)?;

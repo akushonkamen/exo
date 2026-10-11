@@ -2,7 +2,7 @@ use super::*;
 
 #[test]
 fn resource_declarations_validate_sources_and_mounts() -> Result<()> {
-    let source = SOURCE.replace("config:\n", "resources:\n  - name: code\n    type: git_repository\n    url: https://github.com/exoharness/exo\n    checkout: {type: branch, name: main}\n    credential: github\n    mount_path: /workspace\n  - name: data\n    type: directory\n    path: ./fixtures\n    mount_path: /data\n    mode: ro\nconfig:\n");
+    let source = SOURCE.replace("model:\n", "resources:\n  - name: code\n    type: git\n    url: https://github.com/exoharness/exo\n    checkout: {type: branch, name: main}\n    credential: github\n    mount_path: /workspace\n  - name: data\n    type: directory\n    path: ./fixtures\n    mount_path: /data\n    mode: ro\nmodel:\n");
     let definition = AgentDefinition::parse(source.clone())?;
     assert_eq!(definition.frontmatter.resources.len(), 2);
     for invalid in [
@@ -14,10 +14,7 @@ fn resource_declarations_validate_sources_and_mounts() -> Result<()> {
         source.replace("mount_path: /data", "mount_path: /workspace/data"),
         source.replace("name: data", "name: ../data"),
         source.replace("path: ./fixtures", "path: ./fixtures\n    typo: value"),
-        source.replace(
-            "type: git_repository",
-            "type: git_repository\n    path: ./repo",
-        ),
+        source.replace("type: git", "type: git\n    path: ./repo"),
     ] {
         assert!(AgentDefinition::parse(invalid).is_err());
     }
@@ -28,7 +25,7 @@ use exoharness::{
     SecretBackendChoice,
 };
 
-const SOURCE: &str = "---\nharness: codex\nconfig:\n  model: gpt-5.6-sol\n---\n\nInvestigate tickets.\n\n---\nCite each ticket.\n";
+const SOURCE: &str = "---\nharness: codex\nmodel:\n  name: gpt-6.1-sol\n---\n\nInvestigate tickets.\n\n---\nCite each ticket.\n";
 
 #[test]
 fn sandbox_networking_defaults_to_enabled() -> Result<()> {
@@ -48,7 +45,7 @@ impl mcp::McpServerResolver for TestMcpResolver {
 
 #[tokio::test]
 async fn provider_mcp_definitions_resolve_in_the_host_context() -> Result<()> {
-    let source = SOURCE.replace("config:\n", "mcp_servers:\n  - type: provider\n    name: tickets\n    allowed_tools: [search]\n    blocked_tools: [delete]\nconfig:\n");
+    let source = SOURCE.replace("model:\n", "mcp_servers:\n  - type: provider\n    name: tickets\n    allowed_tools: [search]\n    blocked_tools: [delete]\nmodel:\n");
     let definition = AgentDefinition::parse(source.clone())?;
     let root = storage().await?;
     let agent = create_agent(
@@ -97,8 +94,8 @@ async fn provider_mcp_definitions_resolve_in_the_host_context() -> Result<()> {
         source.replace("name: tickets", "name: tickets\n    token: secret"),
         source.replace("name: tickets", "name: tickets\n    provider: internal"),
         source.replace(
-            "config:\n",
-            "  - type: url\n    name: tickets\n    url: https://other.example/mcp\nconfig:\n",
+            "model:\n",
+            "  - type: url\n    name: tickets\n    url: https://other.example/mcp\nmodel:\n",
         ),
     ] {
         assert!(AgentDefinition::parse(invalid).is_err());
@@ -115,7 +112,7 @@ async fn provider_resolver_receives_each_server_name() -> Result<()> {
             Ok(format!("https://{name}.example/mcp"))
         }
     }
-    let definition = AgentDefinition::parse(SOURCE.replace("config:\n", "mcp_servers:\n  - type: provider\n    name: tickets\n  - type: provider\n    name: docs\nconfig:\n"))?;
+    let definition = AgentDefinition::parse(SOURCE.replace("model:\n", "mcp_servers:\n  - type: provider\n    name: tickets\n  - type: provider\n    name: docs\nmodel:\n"))?;
     let servers = definition.resolve_mcp_servers(&Resolver).await?;
     assert_eq!(servers[0].url, "https://tickets.example/mcp");
     assert_eq!(servers[1].url, "https://docs.example/mcp");
@@ -124,7 +121,7 @@ async fn provider_resolver_receives_each_server_name() -> Result<()> {
 
 #[tokio::test]
 async fn saved_mcp_definitions_preserve_filters_and_reject_embedded_credentials() -> Result<()> {
-    let source = SOURCE.replace("config:\n", "mcp_servers:\n  - type: url\n    name: tickets\n    url: https://tickets.example/mcp\n    allowed_tools: [search, read]\n    blocked_tools: [delete]\nconfig:\n");
+    let source = SOURCE.replace("model:\n", "mcp_servers:\n  - type: url\n    name: tickets\n    url: https://tickets.example/mcp\n    allowed_tools: [search, read]\n    blocked_tools: [delete]\nmodel:\n");
     let definition = AgentDefinition::parse(source.clone())?;
     let root = storage().await?;
     let agent = create_agent(
@@ -166,7 +163,7 @@ fn parses_frontmatter_and_preserves_the_original_document() -> Result<()> {
     ] {
         let definition = AgentDefinition::parse(source.clone())?;
         assert_eq!(definition.frontmatter.harness, "codex");
-        assert_eq!(definition.frontmatter.config.model, "gpt-5.6-sol");
+        assert_eq!(definition.frontmatter.model.name, "gpt-6.1-sol");
         assert_eq!(
             definition.instructions,
             "Investigate tickets.\n\n---\nCite each ticket."
@@ -174,13 +171,15 @@ fn parses_frontmatter_and_preserves_the_original_document() -> Result<()> {
         assert_eq!(definition.source, source);
     }
     for source in [
+        SOURCE.replace("model:\n", "config:\n"),
+        SOURCE.replace("name: gpt-6.1-sol", "model: gpt-6.1-sol"),
         SOURCE.replace("harness: codex", "harness: ''"),
-        SOURCE.replace("model: gpt-5.6-sol", "model: ''"),
-        SOURCE.replace("model: gpt-5.6-sol", "model: gpt-5.6-sol\n  temperature: 1"),
-        SOURCE.replace("config:\n", "permissions: always_ask\nconfig:\n"),
+        SOURCE.replace("name: gpt-6.1-sol", "name: ''"),
+        SOURCE.replace("name: gpt-6.1-sol", "name: gpt-6.1-sol\n  temperature: 1"),
+        SOURCE.replace("model:\n", "permissions: always_ask\nmodel:\n"),
         SOURCE.replace(
-            "config:\n",
-            "sandbox: {provider: docker, image: ubuntu:24.04}\nconfig:\n",
+            "model:\n",
+            "sandbox: {provider: docker, image: ubuntu:24.04}\nmodel:\n",
         ),
         SOURCE.replacen("---\n", "", 1),
         "---\nharness: codex".to_string(),

@@ -118,7 +118,6 @@ async fn server_and_inline_threads_share_a_root_without_sharing_ownership() -> R
         vec!["thread", "delete", agent_id.as_str(), served_id.as_str()],
         vec!["agent", "delete", agent_id.as_str()],
         vec![
-            "thread",
             "sandbox",
             "run",
             agent_id.as_str(),
@@ -185,7 +184,6 @@ async fn server_and_inline_threads_share_a_root_without_sharing_ownership() -> R
     f.cli(&[
         "--provider",
         "local",
-        "thread",
         "sandbox",
         "run",
         agent_id.as_str(),

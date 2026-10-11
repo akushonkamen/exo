@@ -70,8 +70,8 @@ Create the agent and start a conversation:
 cat > ts-codex.md <<'EOF'
 ---
 harness: codex
-config:
-  model: gpt-5.5
+model:
+  name: gpt-6.1-sol
   credential: openai
 ---
 Help the user with their task.
@@ -106,8 +106,8 @@ Create the agent and start a conversation:
 cat > ts-claude-code.md <<'EOF'
 ---
 harness: claude-code
-config:
-  model: claude-sonnet-4-6
+model:
+  name: claude-sonnet-4-6
   credential: anthropic
 ---
 Help the user with their task.
@@ -143,8 +143,8 @@ Create the agent and start a conversation:
 cat > ts-cursor.md <<'EOF'
 ---
 harness: cursor
-config:
-  model: auto
+model:
+  name: auto
   credential: cursor
 ---
 Help the user with their task.
@@ -182,8 +182,8 @@ Create the agent and start a conversation:
 cat > ts-pi.md <<'EOF'
 ---
 harness: pi
-config:
-  model: gpt-5.5
+model:
+  name: gpt-6.1-sol
   credential: openai
 ---
 Help the user with their task.

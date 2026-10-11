@@ -1,13 +1,14 @@
 ---
 search: false
-title: exo
+title: Exo
 description: A systems approach to recursive self-improvement.
 ---
 
-# exo
+# Exo
 
 ::: warning Archived documentation
 This page describes the earlier Exo self-agent or older APIs and may be out of date. See the [current docs](/).
+These pages use older CLI and configuration syntax. The current local state directory is `~/.exo`; managed agents use `thread fork --up-to` rather than the older clone, rewind, or migrate commands.
 :::
 
 Exo is a complete agent harness with tools, scheduled tasks, adapters

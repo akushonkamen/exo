@@ -1,7 +1,7 @@
 ---
 harness: ./agent/harness.ts
-config:
-  model: gpt-5.5
+model:
+  name: gpt-6.1-sol
   credential: openai
   max_tool_round_trips: 20
 ---

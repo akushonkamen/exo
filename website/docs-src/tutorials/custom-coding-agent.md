@@ -5,14 +5,10 @@ description: Build a coding agent one component at a time, and see how the harne
 
 # Custom Coding Agent
 
-::: warning Under construction
-These docs are still being written, and some documented features are still being implemented. See [Planned additions](/agent-definition#planned-additions).
-:::
-
 This tutorial builds a coding agent — one that runs commands in a sandbox
 and works through a multi-step task — by adding **one component at a time**
 and seeing how the harness supports each. It builds directly on the two
-hooks from the [Custom Agent Quickstart](write-your-own-agent):
+hooks from the [Custom harness](write-your-own-agent):
 `registerTools` and `instructions`.
 
 The finished file is
@@ -52,7 +48,7 @@ can read files, search, edit, build, and run — all in the sandbox.
 Now a tool the harness doesn't ship: task tracking, so the model can hold a
 plan across many steps. We define a `todowrite` tool where the model
 rewrites its whole task list each call, and persist that list as a
-conversation [artifact](../reference/data-model) — the harness's durable
+conversation [artifact](../architecture/data-model) — the harness's durable
 key/value storage — so it survives across turns:
 
 ```ts
@@ -231,8 +227,8 @@ export default defineHarness({
 cat > coder.md <<'EOF'
 ---
 harness: exoharness/examples/typescript/coding-agent-harness.ts
-config:
-  model: gpt-5.5
+model:
+  name: gpt-6.1-sol
   credential: openai
 ---
 Help the user with their task.
@@ -244,16 +240,17 @@ name: coding
 config:
   provider: docker
   image: python:3.12-slim
-  enable_networking: true
+  policy:
+    networking: {type: unrestricted}
 EOF
 exo agent run --agent coder --thread coder-build --environment-file coding-environment.yaml
 ```
 
-The default sandbox image is `ubuntu:24.04`, which is bare — no Python,
+For custom harnesses, the default sandbox image is `ubuntu:24.04`, which is bare — no Python,
 Node, etc. Setting `config.image` in the environment file chooses the image
 for this thread; the model installs anything else it needs with the shell tool.
 
-A real run (via `conversation send`), asking it to write a buggy
+A real run (via `thread send`), asking it to write a buggy
 `fizzbuzz.py`, find the bug, and fix it — abbreviated to show the shape:
 
 ```text
@@ -279,6 +276,6 @@ command confirmed them.
 
 - Register more built-in tools, or add custom tools for anything the shell
   can't express directly.
-- Read [Executors & Harnesses](../reference/harnesses) to see the
+- Read [Harnesses](../architecture/harnesses) to see the
   built-in `codex` / `claude-code` / `cursor` harnesses, which wrap full
   coding-agent runtimes with durable exoharness state.

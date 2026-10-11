@@ -92,8 +92,8 @@ The built-in Codex, Claude Code, and Pi wrappers select a vault secret from the
 agent spec and add it to the sandbox's ordinary credential policy:
 
 ```yaml
-config:
-  model: gpt-5-mini
+model:
+  name: gpt-5-mini
   credential: openai
 ```
 

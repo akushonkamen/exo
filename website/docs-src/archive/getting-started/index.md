@@ -8,6 +8,7 @@ description: One setup script to a running, self-improving agent.
 
 ::: warning Archived documentation
 This page describes the earlier Exo self-agent or older APIs and may be out of date. See the [current docs](/).
+These pages use older CLI and configuration syntax. The current local state directory is `~/.exo`; managed agents use `thread fork --up-to` rather than the older clone, rewind, or migrate commands.
 :::
 
 Get a fully functional agent — sandbox, scheduler, browser chat — with one

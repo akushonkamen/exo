@@ -21,6 +21,8 @@ pub enum ResourceSource {
     Directory {
         path: PathBuf,
     },
+    // Existing saved resource state uses git_repository.
+    #[serde(rename = "git", alias = "git_repository")]
     GitRepository {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         path: Option<PathBuf>,
@@ -131,7 +133,7 @@ impl ResourceDefinition {
             } => {
                 ensure!(
                     path.is_some() != url.is_some(),
-                    "git_repository requires exactly one of path or url"
+                    "git resources require exactly one of path or url"
                 );
                 if let Some(path) = path {
                     ensure!(

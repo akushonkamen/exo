@@ -1003,7 +1003,7 @@ export default defineHarness({{
     )?;
     assert!(!f.temp.path().join(&module).exists());
     let source = format!(
-        "---\nharness: {module}\nconfig:\n  model: gpt-5-mini\nmcp_servers:\n  - type: url\n    name: workspace\n    permission_policy: {{type: always_allow}}\n    url: {url}\n---\nLook up the workspace.\n"
+        "---\nharness: {module}\nmodel:\n  name: gpt-5-mini\nmcp_servers:\n  - type: url\n    name: workspace\n    permission_policy: {{type: always_allow}}\n    url: {url}\n---\nLook up the workspace.\n"
     );
     std::fs::write(&f.agent_file, &source)?;
     f.cli(&["provider", "switch", "remote"]).await?;
@@ -1900,7 +1900,7 @@ async fn models_use_spec_names_and_selected_vault_credentials_locally_and_over_h
         )?;
         std::fs::write(
             &f.agent_file,
-            f.source().replace("gpt-5-mini", "gpt-5.6-sol"),
+            f.source().replace("gpt-5-mini", "gpt-6.1-sol"),
         )?;
         let result = f
             .cli(&[
@@ -1931,7 +1931,7 @@ async fn models_use_spec_names_and_selected_vault_credentials_locally_and_over_h
         }
         assert_eq!(
             requests[0].body_json::<ModelPayload>()?.model,
-            "gpt-5.6-sol"
+            "gpt-6.1-sol"
         );
         f.cli(&[
             "vault",

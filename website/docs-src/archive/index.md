@@ -14,5 +14,6 @@ For the current product, start with the [overview](/), [agent definition](/agent
 - [Getting started](./getting-started/) — the setup.sh flow and earlier CLI examples.
 - [Earlier architecture](./concepts/) — the self-agent, scheduler, adapters, and their older lifecycle and tool APIs.
 
-The general runtime concepts are in the main [Architecture](/concepts/) section,
-alongside the [custom harness tutorials](/tutorials/write-your-own-agent).
+The general runtime concepts are in [Harnesses](/architecture/harnesses) and
+[Data model](/architecture/data-model), alongside the
+[custom harness tutorials](/tutorials/write-your-own-agent).

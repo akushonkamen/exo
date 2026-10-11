@@ -20,7 +20,7 @@ async fn resumed_threads_use_updated_agent_permissions() -> Result<()> {
         )?,
         None,
     );
-    let source = "---\nharness: basic\nconfig:\n  model: fixture\npermission_policy: {type: always_allow}\n---\nUse tools.\n";
+    let source = "---\nharness: basic\nmodel:\n  name: fixture\npermission_policy: {type: always_allow}\n---\nUse tools.\n";
     let definition = AgentDefinition::parse(source.into())?;
     let agent = runtime
         .create_managed_agent(&definition, "permissions", "permissions")

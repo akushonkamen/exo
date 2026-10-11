@@ -1,11 +1,11 @@
 ---
 harness: codex
-config:
-  model: gpt-5.6-sol
+model:
+  name: gpt-6.1-sol
   credential: openai
 resources:
   - name: code
-    type: git_repository
+    type: git
     url: https://github.com/exoharness/exo
     checkout: { type: branch, name: main }
     mount_path: /workspace

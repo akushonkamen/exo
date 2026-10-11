@@ -13,7 +13,7 @@ use tempfile::TempDir;
 
 use super::*;
 
-const SOURCE: &str = "---\nharness: basic\nconfig:\n  model: gpt-5.4\n  credential: test-openai\n---\n\nInvestigate support tickets.\n";
+const SOURCE: &str = "---\nharness: basic\nmodel:\n  name: gpt-5.4\n  credential: test-openai\n---\n\nInvestigate support tickets.\n";
 
 #[derive(Default)]
 struct RecordingModel {
@@ -308,7 +308,7 @@ async fn model_names_pass_through_without_registration_or_substitution() -> Resu
     )
     .await?;
     let path = temp.path().join("agent.md");
-    std::fs::write(&path, SOURCE.replace("gpt-5.4", "gpt-5.6-sol"))?;
+    std::fs::write(&path, SOURCE.replace("gpt-5.4", "gpt-6.1-sol"))?;
     let definition = AgentDefinition::load(&path)?;
     let mut args = thread_args("unused");
     args.agent = None;
@@ -317,7 +317,7 @@ async fn model_names_pass_through_without_registration_or_substitution() -> Resu
         open_configured_thread(runtime.as_ref(), Some(&definition), &args).await?;
     assert_eq!(
         executor::load_agent_config(agent.as_ref()).await?.model,
-        "gpt-5.6-sol"
+        "gpt-6.1-sol"
     );
     assert!(
         executor::get_conversation_model_override(thread.as_ref())

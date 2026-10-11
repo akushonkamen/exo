@@ -1,7 +1,7 @@
 ---
 harness: pi
-config:
-  model: gpt-5-mini
+model:
+  name: gpt-5-mini
   credential: openai
 permission_policy:
   type: always_ask

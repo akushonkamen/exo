@@ -44,15 +44,15 @@ async fn local_and_http_cli_prompt_before_executing_and_continue_after_denial() 
                     ResponseTemplate::new(200).set_body_json(serde_json::json!({"jsonrpc":"2.0","id":rpc.id,"result":result}))
                 }).mount(&mcp_server).await;
                 f.source().replace(
-                    "config:",
+                    "model:",
                     &format!(
-                        "mcp_servers:\n  - type: url\n    name: notes\n    url: {}/mcp\nconfig:",
+                        "mcp_servers:\n  - type: url\n    name: notes\n    url: {}/mcp\nmodel:",
                         mcp_server.uri()
                     ),
                 )
             } else {
                 f.source()
-                    .replace("config:", "permission_policy: {type: always_ask}\nconfig:")
+                    .replace("model:", "permission_policy: {type: always_ask}\nmodel:")
             };
             std::fs::write(&f.agent_file, source)?;
             let arguments = if mcp {
@@ -287,7 +287,7 @@ async fn unknown_tool_policies_fail_before_model_execution() -> Result<()> {
         ] {
             std::fs::write(
                 &f.agent_file,
-                f.source().replace("config:", &format!("{policy}\nconfig:")),
+                f.source().replace("model:", &format!("{policy}\nmodel:")),
             )?;
             let output = f
                 .output(

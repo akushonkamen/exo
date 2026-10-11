@@ -1,4 +1,5 @@
 import { defineConfig } from "vitepress";
+import { eventKindsMarkdown } from "./event-kinds";
 
 // Docs are served under exoharness.ai/docs by the Cloudflare Worker in
 // website/. `vitepress build` emits static files straight into website/dist/docs
@@ -9,9 +10,16 @@ export default defineConfig({
   outDir: "../dist/docs",
   cleanUrls: true,
   lang: "en",
-  title: "exo docs",
-  description: "Documentation for exo — a minimal system for building agents.",
+  title: "Exo docs",
+  description: "Exo is an open source runtime for agents.",
   appearance: "dark",
+  markdown: {
+    config(md) {
+      md.core.ruler.before("normalize", "exo-event-kinds", (state) => {
+        state.src = state.src.replace("<!-- EXO_EVENT_KINDS -->", eventKindsMarkdown);
+      });
+    },
+  },
   head: [
     ["link", { rel: "icon", type: "image/svg+xml", href: "/favicon.svg" }],
   ],
@@ -20,14 +28,16 @@ export default defineConfig({
       light: "/images/exo-badge-light.svg",
       dark: "/images/exo-badge-dark.svg",
     },
-    siteTitle: "exo",
+    siteTitle: "Exo",
     nav: [
       { text: "Docs", link: "/" },
-      { text: "Archive", link: "/archive/" },
       { text: "GitHub", link: "https://github.com/exoharness/exo" },
     ],
     search: { provider: "local" },
-    socialLinks: [{ icon: "github", link: "https://github.com/exoharness/exo" }],
+    socialLinks: [
+      { icon: "github", link: "https://github.com/exoharness/exo" },
+      { icon: "discord", link: "https://discord.gg/8x23hdBJU6" },
+    ],
     sidebar: {
       "/archive/": [
         { text: "Current docs", link: "/" },
@@ -103,23 +113,12 @@ export default defineConfig({
         },
         {
           text: "Architecture",
-          link: "/concepts/",
           collapsed: true,
           items: [
-            {
-              text: "Exoharness & executor",
-              link: "/concepts/exoharness-and-executor",
-            },
-            { text: "Data model", link: "/reference/data-model" },
-            { text: "Harnesses", link: "/reference/harnesses" },
-            { text: "Lifecycles", link: "/concepts/lifecycles" },
-            { text: "Sandboxes", link: "/concepts/sandboxes" },
-            { text: "Forks and snapshots", link: "/concepts/time-travel" },
-            {
-              text: "Vaults and credentials",
-              link: "/concepts/bindings-and-secrets",
-            },
-            { text: "Tools", link: "/concepts/tools" },
+            { text: "Harnesses", link: "/architecture/harnesses" },
+            { text: "Data model", link: "/architecture/data-model" },
+            { text: "Sandboxes", link: "/architecture/sandboxes" },
+            { text: "Vaults", link: "/architecture/vaults" },
           ],
         },
         { text: "Development", link: "/development/" },

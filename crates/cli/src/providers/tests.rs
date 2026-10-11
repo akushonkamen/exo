@@ -54,7 +54,7 @@ async fn http_runtime_does_not_initialize_local_state_or_resolve_remote_harnesse
         "hello",
     ])?;
     let definition = exo_managed_agents::AgentDefinition::parse(
-        "---\nharness: server-owned-harness\nconfig:\n  model: server-model\n---\n\nAnswer questions.".into(),
+        "---\nharness: server-owned-harness\nmodel:\n  name: server-model\n---\n\nAnswer questions.".into(),
     )?;
     let runtime = runtime(
         &cli,
@@ -485,12 +485,12 @@ fn local_commands_resolve_agent_and_thread_aliases() -> Result<()> {
         "thread fork agent thread",
         "thread update agent thread --model gpt-5-mini",
         "thread mount create agent thread /tmp /work",
-        "thread sandbox run agent thread pwd",
+        "sandbox run agent thread pwd",
     ] {
         let mut cli =
             crate::Cli::try_parse_from(["exo"].into_iter().chain(args.split_whitespace()))?;
         let (agent_ref, thread_ref) = crate::command_refs_mut(&mut cli.command);
-        let has_thread = args.starts_with("thread ");
+        let has_thread = args.starts_with("thread ") || args.starts_with("sandbox ");
         assert_eq!(
             store
                 .selected(

@@ -8,6 +8,7 @@ description: The three core concepts — exoharness, executor, sandbox — and h
 
 ::: warning Archived documentation
 This page describes the earlier Exo self-agent or older APIs and may be out of date. See the [current docs](/).
+These pages use older CLI and configuration syntax. The current local state directory is `~/.exo`; managed agents use `thread fork --up-to` rather than the older clone, rewind, or migrate commands.
 :::
 
 ![Exo architecture overview](/images/architecture-overview.svg)
@@ -53,18 +54,18 @@ agent was never at risk.
 
 ## Going deeper
 
-- [Exoharness & Executor](/concepts/exoharness-and-executor) — why the split
+- [Harnesses](/architecture/harnesses) — why the split
   exists and what it buys you.
-- [Data Model](../../reference/data-model) — agents, conversations, sessions, turns,
+- [Data Model](../../architecture/data-model) — agents, conversations, sessions, turns,
   events, and artifacts.
 - [Lifecycles](lifecycles) — how agents, conversations, sandboxes, and
   adapters start, stay up, change, and stop.
-- [Time Travel](/concepts/time-travel) — fork and rewind from any point in the
+- [Time Travel](/architecture/data-model#forking-history) — fork and rewind from any point in the
   event log.
-- [Sandboxes](/concepts/sandboxes) — backends, scope, and snapshots.
-- [Bindings & Secrets](/concepts/bindings-and-secrets) — how credentials stay
+- [Sandboxes](/architecture/sandboxes) — backends, scope, and snapshots.
+- [Vaults](/architecture/vaults) — how credentials stay
   out of the model's reach.
-- [Executors & Harnesses](../../reference/harnesses) — the built-in executor
+- [Executors & Harnesses](../../architecture/harnesses) — the built-in executor
   runtimes; a *harness* is an executor running on an exoharness.
 - [Tools](tools) — functions the model calls during a turn, and where
   they come from and run.

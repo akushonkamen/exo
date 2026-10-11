@@ -8,6 +8,7 @@ description: Store a secret, configure an agent, and start chatting.
 
 ::: warning Archived documentation
 This page describes the earlier Exo self-agent or older APIs and may be out of date. See the [current docs](/).
+These pages use older CLI and configuration syntax. The current local state directory is `~/.exo`; managed agents use `thread fork --up-to` rather than the older clone, rewind, or migrate commands.
 :::
 
 The [setup script](installation) does all of this for you. Use this
@@ -38,7 +39,7 @@ cat > assistant.md <<'EOF'
 ---
 harness: basic
 config:
-  model: gpt-5.5
+  model: gpt-6.1-sol
   credential: openai
 ---
 Help the user with their task.

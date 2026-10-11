@@ -503,7 +503,8 @@ impl Cli {
             | Commands::Vault { runtime, .. }
             | Commands::Serve { runtime, .. }
             | Commands::Agent { runtime, .. }
-            | Commands::Conversation { runtime, .. } => runtime,
+            | Commands::Conversation { runtime, .. }
+            | Commands::Sandbox { runtime, .. } => runtime,
             Commands::Provider { .. } | Commands::FirecrackerBridge => {
                 unreachable!("command does not use runtime options")
             }
@@ -542,6 +543,13 @@ enum Commands {
         runtime: RuntimeArgs,
         #[command(subcommand)]
         command: environment::EnvironmentCommands,
+    },
+    /// Manage sandbox execution and externally provisioned environments.
+    Sandbox {
+        #[command(flatten)]
+        runtime: RuntimeArgs,
+        #[command(subcommand)]
+        command: SandboxCommands,
     },
     /// Manage vaults and their credentials, including MCP login.
     Vault {
@@ -700,10 +708,6 @@ enum ConversationCommands {
         #[command(subcommand)]
         command: ConversationMountCommands,
     },
-    Sandbox {
-        #[command(subcommand)]
-        command: ConversationSandboxCommands,
-    },
     #[command(alias = "show")]
     Get {
         agent: String,
@@ -759,7 +763,7 @@ enum ConversationCommands {
 }
 
 #[derive(Debug, Subcommand)]
-enum ConversationSandboxCommands {
+enum SandboxCommands {
     /// Forward a local TCP listener to a published port in a running thread sandbox.
     Forward {
         agent: String,
@@ -1346,6 +1350,89 @@ async fn run_selected(
                 println!("deleted agent {}", agent);
             }
         },
+        Commands::Sandbox { command, .. } => match command {
+            SandboxCommands::Forward {
+                agent,
+                conversation,
+                port,
+                bind,
+            } => {
+                let conversation =
+                    must_get_conversation(harness.as_ref(), &agent, &conversation).await?;
+                port_forward::run(conversation, port, bind).await?;
+            }
+            SandboxCommands::Attach {
+                agent,
+                conversation,
+                provider,
+                external_id,
+                default_workdir,
+            } => {
+                let provider = SandboxProvider::from(provider);
+                let attachment = if provider == SandboxProvider::Docker {
+                    SandboxAttachment::DockerContainer {
+                        container_id: external_id,
+                    }
+                } else {
+                    bail!(
+                        "sandbox provider {} does not support external attachments",
+                        provider.as_str()
+                    )
+                };
+                let conversation =
+                    must_get_conversation(harness.as_ref(), &agent, &conversation).await?;
+                let sandbox_id = conversation
+                    .attach_sandbox(AttachSandboxRequest {
+                        attachment,
+                        default_workdir,
+                    })
+                    .await?;
+                println!(
+                    "attached Docker container as sandbox {} for {}",
+                    sandbox_id,
+                    conversation.record().slug
+                );
+            }
+            SandboxCommands::Detach {
+                agent,
+                conversation,
+                sandbox_id,
+            } => {
+                let conversation =
+                    must_get_conversation(harness.as_ref(), &agent, &conversation).await?;
+                let attachment = conversation
+                    .detach_sandbox(sandbox_id.clone())
+                    .await?;
+                println!(
+                    "detached sandbox {} from {}: {}",
+                    sandbox_id,
+                    conversation.record().slug,
+                    serde_json::to_string(&attachment)?
+                );
+            }
+            SandboxCommands::Run {
+                agent,
+                conversation,
+                command,
+            } => {
+                let agent_handle = must_get_agent(harness.as_ref(), &agent).await?;
+                let conversation = harness
+                    .get_conversation(agent_handle.as_ref(), &conversation)
+                    .await?
+                    .ok_or_else(|| anyhow!("conversation not found: {}", conversation))?;
+                let output = run_sandbox_shell_command(
+                    agent_handle.as_ref(),
+                    conversation.as_ref(),
+                    command,
+                )
+                .await?;
+                io::stdout().write_all(output.stdout.as_bytes())?;
+                io::stderr().write_all(output.stderr.as_bytes())?;
+                if output.exit_code != 0 {
+                    bail!("sandbox command exited with status {}", output.exit_code);
+                }
+            }
+        },
         Commands::Conversation { command, .. } => match command {
             ConversationCommands::Ports { agent, conversation } => {
                 let conversation = must_get_conversation(harness.as_ref(), &agent, &conversation).await?;
@@ -1611,89 +1698,6 @@ async fn run_selected(
                         mount_path,
                         conversation.record().slug
                     );
-                }
-            },
-            ConversationCommands::Sandbox { command, .. } => match command {
-                ConversationSandboxCommands::Forward {
-                    agent,
-                    conversation,
-                    port,
-                    bind,
-                } => {
-                    let conversation =
-                        must_get_conversation(harness.as_ref(), &agent, &conversation).await?;
-                    port_forward::run(conversation, port, bind).await?;
-                }
-                ConversationSandboxCommands::Attach {
-                    agent,
-                    conversation,
-                    provider,
-                    external_id,
-                    default_workdir,
-                } => {
-                    let provider = SandboxProvider::from(provider);
-                    let attachment = if provider == SandboxProvider::Docker {
-                        SandboxAttachment::DockerContainer {
-                            container_id: external_id,
-                        }
-                    } else {
-                        bail!(
-                            "sandbox provider {} does not support external attachments",
-                            provider.as_str()
-                        )
-                    };
-                    let conversation =
-                        must_get_conversation(harness.as_ref(), &agent, &conversation).await?;
-                    let sandbox_id = conversation
-                        .attach_sandbox(AttachSandboxRequest {
-                            attachment,
-                            default_workdir,
-                        })
-                        .await?;
-                    println!(
-                        "attached Docker container as sandbox {} for {}",
-                        sandbox_id,
-                        conversation.record().slug
-                    );
-                }
-                ConversationSandboxCommands::Detach {
-                    agent,
-                    conversation,
-                    sandbox_id,
-                } => {
-                    let conversation =
-                        must_get_conversation(harness.as_ref(), &agent, &conversation).await?;
-                    let attachment = conversation
-                        .detach_sandbox(sandbox_id.clone())
-                        .await?;
-                    println!(
-                        "detached sandbox {} from {}: {}",
-                        sandbox_id,
-                        conversation.record().slug,
-                        serde_json::to_string(&attachment)?
-                    );
-                }
-                ConversationSandboxCommands::Run {
-                    agent,
-                    conversation,
-                    command,
-                } => {
-                    let agent_handle = must_get_agent(harness.as_ref(), &agent).await?;
-                    let conversation = harness
-                        .get_conversation(agent_handle.as_ref(), &conversation)
-                        .await?
-                        .ok_or_else(|| anyhow!("conversation not found: {}", conversation))?;
-                    let output = run_sandbox_shell_command(
-                        agent_handle.as_ref(),
-                        conversation.as_ref(),
-                        command,
-                    )
-                    .await?;
-                    io::stdout().write_all(output.stdout.as_bytes())?;
-                    io::stderr().write_all(output.stderr.as_bytes())?;
-                    if output.exit_code != 0 {
-                        bail!("sandbox command exited with status {}", output.exit_code);
-                    }
                 }
             },
             ConversationCommands::Get {
@@ -1972,29 +1976,29 @@ fn command_refs_mut(command: &mut Commands) -> (Option<&mut String>, Option<&mut
                     ..
                 } => (Some(agent), Some(conversation)),
             },
-            ConversationCommands::Sandbox { command, .. } => match command {
-                ConversationSandboxCommands::Forward {
-                    agent,
-                    conversation,
-                    ..
-                }
-                | ConversationSandboxCommands::Attach {
-                    agent,
-                    conversation,
-                    ..
-                }
-                | ConversationSandboxCommands::Detach {
-                    agent,
-                    conversation,
-                    ..
-                }
-                | ConversationSandboxCommands::Run {
-                    agent,
-                    conversation,
-                    ..
-                } => (Some(agent), Some(conversation)),
-            },
             ConversationCommands::CompleteRebuildUpdate { .. } => (None, None),
+        },
+        Commands::Sandbox { command, .. } => match command {
+            SandboxCommands::Forward {
+                agent,
+                conversation,
+                ..
+            }
+            | SandboxCommands::Attach {
+                agent,
+                conversation,
+                ..
+            }
+            | SandboxCommands::Detach {
+                agent,
+                conversation,
+                ..
+            }
+            | SandboxCommands::Run {
+                agent,
+                conversation,
+                ..
+            } => (Some(agent), Some(conversation)),
         },
         Commands::FirecrackerBridge
         | Commands::Provider { .. }
@@ -2371,7 +2375,6 @@ mod command_tests {
             "secret",
             "model",
             "sandbox-provider",
-            "sandbox",
             "environments",
             "tools",
             "adapters",
@@ -2383,6 +2386,7 @@ mod command_tests {
             vec!["agent", "update", "support", "--file", "agent.md"],
             vec!["serve", "--agent", "support"],
             vec!["environment", "provider", "list"],
+            vec!["sandbox", "run", "support", "thread", "pwd"],
         ] {
             Cli::try_parse_from(["exo"].into_iter().chain(args)).unwrap();
         }

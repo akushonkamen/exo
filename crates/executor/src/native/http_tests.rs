@@ -641,7 +641,7 @@ async fn managed_agents_created_locally_resume_over_http() -> Result<()> {
     );
     let remote = Runtime::new(HttpProvider::new(f.client.clone()), None);
     let definition = exo_managed_agents::AgentDefinition::parse(
-        "---\nharness: basic\nconfig:\n  model: test-model\n---\n\nKeep the saved instructions."
+        "---\nharness: basic\nmodel:\n  name: test-model\n---\n\nKeep the saved instructions."
             .into(),
     )?;
     let saved = local
@@ -987,7 +987,7 @@ async fn saved_policy_changes_apply_to_existing_local_and_http_threads() -> Resu
             let policy = if ask { "always_ask" } else { "always_allow" };
             local_agent.write_artifact(exoharness::WriteArtifactRequest {
                 path: exo_managed_agents::AGENT_DEFINITION_PATH.into(),
-                contents: format!("---\nharness: basic\npermission_policy: {{type: {policy}}}\nconfig:\n  model: test-model\n---\nUse tools.").into_bytes(),
+                contents: format!("---\nharness: basic\npermission_policy: {{type: {policy}}}\nmodel:\n  name: test-model\n---\nUse tools.").into_bytes(),
             }).await?;
             f.release.add_permits(1);
             let (turn, mut stream) = runtime
@@ -1193,7 +1193,7 @@ async fn canceled_http_observer_does_not_orphan_the_next_accepted_turn() -> Resu
 async fn rejected_agent_update_restores_the_saved_definition() -> Result<()> {
     let f = Fixture::new().await?;
     let source =
-        "---\nharness: basic\nconfig:\n  model: test-model\n---\n\nKeep the saved instructions.";
+        "---\nharness: basic\nmodel:\n  name: test-model\n---\n\nKeep the saved instructions.";
     let request = |source: &str| exoharness::WriteArtifactRequest {
         path: exo_managed_agents::AGENT_DEFINITION_PATH.into(),
         contents: source.as_bytes().to_vec(),

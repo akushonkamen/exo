@@ -8,7 +8,7 @@ existing files, including across sandbox replacement.
 ```yaml
 resources:
   - name: code
-    type: git_repository
+    type: git
     url: https://github.com/exoharness/exo
     checkout: { type: branch, name: main }
     mount_path: /workspace
@@ -83,7 +83,7 @@ control repository access; this does not add a separate Git push approval policy
 ## Local sources
 
 `type: directory` copies a local directory, including untracked files. A local
-Git checkout can use `type: git_repository` with `path` instead of `url`; this
+Git checkout can use `type: git` with `path` instead of `url`; this
 also makes its Git metadata independent and preserves staged/unstaged changes.
 Local paths resolve relative to the agent file. The HTTP runtime accepts absolute
 paths on its own host; it does not upload the client's directory.
