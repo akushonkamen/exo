@@ -1,10 +1,17 @@
 import { createServer as createViteServer } from "vite";
 import { createServer as createVitePressServer } from "vitepress";
 
-const docsServer = await createVitePressServer("website/docs-src", {
-  host: "127.0.0.1",
-  port: 5180,
-});
+const createDocsServer = () =>
+  createVitePressServer(
+    "website/docs-src",
+    { host: "127.0.0.1", port: 5180 },
+    async () => {
+      await docsServer.close();
+      docsServer = await createDocsServer();
+      await docsServer.listen();
+    },
+  );
+let docsServer = await createDocsServer();
 
 try {
   await docsServer.listen();

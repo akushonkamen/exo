@@ -1,5 +1,6 @@
 import { defineConfig } from "vitepress";
 import { eventKindsMarkdown } from "./event-kinds";
+import { darkTheme, lightTheme } from "./shiki-themes";
 
 // Docs are served under exoharness.ai/docs by the Cloudflare Worker in
 // website/. `vitepress build` emits static files straight into website/dist/docs
@@ -12,8 +13,8 @@ export default defineConfig({
   lang: "en",
   title: "Exo docs",
   description: "Exo is an open source runtime for agents.",
-  appearance: "dark",
   markdown: {
+    theme: { light: lightTheme, dark: darkTheme },
     config(md) {
       md.core.ruler.before("normalize", "exo-event-kinds", (state) => {
         state.src = state.src.replace("<!-- EXO_EVENT_KINDS -->", eventKindsMarkdown);
@@ -25,19 +26,16 @@ export default defineConfig({
   ],
   themeConfig: {
     logo: {
-      light: "/images/exo-badge-light.svg",
-      dark: "/images/exo-badge-dark.svg",
+      light: "/images/exo-badge-dark.svg",
+      dark: "/images/exo-badge-light.svg",
     },
     siteTitle: "Exo",
+    logoLink: { link: "/", target: "_self" },
     nav: [
-      { text: "Docs", link: "/" },
       { text: "GitHub", link: "https://github.com/exoharness/exo" },
+      { text: "Discord", link: "https://discord.gg/8x23hdBJU6" },
     ],
     search: { provider: "local" },
-    socialLinks: [
-      { icon: "github", link: "https://github.com/exoharness/exo" },
-      { icon: "discord", link: "https://discord.gg/8x23hdBJU6" },
-    ],
     sidebar: {
       "/archive/": [
         { text: "Current docs", link: "/" },
@@ -113,7 +111,7 @@ export default defineConfig({
         },
         {
           text: "Architecture",
-          collapsed: true,
+          collapsed: false,
           items: [
             { text: "Harnesses", link: "/architecture/harnesses" },
             { text: "Data model", link: "/architecture/data-model" },
