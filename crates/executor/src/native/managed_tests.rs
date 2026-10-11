@@ -448,8 +448,8 @@ async fn mcp_authentication_errors_identify_the_selected_vaults_and_secret() -> 
         })
         .await?;
     let definition = AgentDefinition::parse(SOURCE.replace(
-        "config:\n",
-        &format!("mcp_servers:\n  - type: url\n    name: github\n    url: {url}\nconfig:\n"),
+        "model:\n",
+        &format!("mcp_servers:\n  - type: url\n    name: github\n    url: {url}\nmodel:\n"),
     ))?;
     let runtime = runtime(store.clone(), &config, Default::default())?;
     let agent = runtime
@@ -632,7 +632,7 @@ async fn vault_selection_survives_resume_and_rejects_unsafe_config_changes() -> 
     );
     agent.write_artifact(WriteArtifactRequest {
         path: managed::AGENT_DEFINITION_PATH.into(),
-        contents: SOURCE.replace("config:\n", "mcp_servers:\n  - type: url\n    name: changed\n    url: http://127.0.0.1:1/mcp\nconfig:\n").into_bytes(),
+        contents: SOURCE.replace("model:\n", "mcp_servers:\n  - type: url\n    name: changed\n    url: http://127.0.0.1:1/mcp\nmodel:\n").into_bytes(),
     }).await?;
     let error = runtime
         .send(
@@ -673,7 +673,7 @@ async fn agent_resources_are_inherited_pinned_and_cleaned_up() -> Result<()> {
         },
     )?;
     let agent_file = temp.path().join("agent.md");
-    let definition_text = SOURCE.replace("config:\n", "resources:\n  - name: code\n    type: directory\n    path: ./repo\n    mount_path: /workspace\nconfig:\n");
+    let definition_text = SOURCE.replace("model:\n", "resources:\n  - name: code\n    type: directory\n    path: ./repo\n    mount_path: /workspace\nmodel:\n");
     std::fs::write(&agent_file, &definition_text)?;
     let definition = AgentDefinition::load(&agent_file)?;
     let agent = runtime
