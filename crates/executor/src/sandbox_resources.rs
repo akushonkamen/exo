@@ -1,7 +1,7 @@
 //! Git workspaces for backends without host filesystem mounts.
 use crate::{AgentConfig, ConversationConfig};
 use anyhow::{Result, ensure};
-use exoharness::resources::{GitCheckout, PreparedResource, ResourceSource};
+use exoharness::resources::{PreparedResource, ResourceSource};
 use exoharness::{ConversationHandle, RunInSandboxRequest};
 use futures::io::{AsyncBufReadExt, AsyncReadExt, BufReader};
 
@@ -90,8 +90,9 @@ pub(crate) fn git_script(resource: &PreparedResource) -> Result<String> {
     if let ResourceSource::GitRepository { credential, .. } = &mut identity.definition.source {
         *credential = None;
     }
+    identity.definition.mount_path = Some(definition.mount_path().into_owned());
     let identity = quote(&serde_json::to_string(&identity)?);
-    let destination = quote(&definition.mount_path);
+    let destination = quote(&definition.mount_path());
     // The marker is captured with the sandbox, so restoring never fetches or
     // resets a workspace containing the agent's changes. A different resource
     // definition requires a new thread rather than overwriting that workspace.
@@ -125,15 +126,19 @@ trap 'rm -rf "$staging"' EXIT
     } else {
         String::new()
     };
-    let branch = match checkout {
-        Some(GitCheckout::Branch { name }) => format!(" --branch {}", quote(name)),
-        _ => String::new(),
-    };
+    let commit = checkout.as_deref().filter(|reference| {
+        matches!(reference.len(), 40 | 64) && reference.bytes().all(|c| c.is_ascii_hexdigit())
+    });
+    let branch = checkout
+        .as_deref()
+        .filter(|_| commit.is_none())
+        .map(|reference| format!(" --branch {}", quote(reference)))
+        .unwrap_or_default();
     script.push_str(&format!(
         "git{auth} clone --progress --depth=1 --single-branch --no-tags --no-recurse-submodules{branch} -- {} \"$staging/repo\"\n",
         quote(url)
     ));
-    if let Some(GitCheckout::Commit { sha }) = checkout {
+    if let Some(sha) = commit {
         script.push_str(&format!("git{auth} -C \"$staging/repo\" fetch --depth=1 origin {}\ngit -C \"$staging/repo\" checkout --detach {}\n", quote(sha), quote(sha)));
     }
     if credential.is_some() {
@@ -204,15 +209,13 @@ mod tests {
             snapshot: None,
             definition: ResourceDefinition {
                 name: "repo".into(),
-                mount_path: directory.path().join("workspace").to_string_lossy().into(),
+                mount_path: Some(directory.path().join("workspace").to_string_lossy().into()),
                 mode: exoharness::FileSystemMountMode::ReadWrite,
                 source: ResourceSource::GitRepository {
                     path: None,
                     url: Some("https://git.example/repo".into()),
                     credential: Some("git".into()),
-                    checkout: Some(GitCheckout::Branch {
-                        name: "missing".into(),
-                    }),
+                    checkout: Some("missing".into()),
                 },
             },
         };
@@ -229,7 +232,7 @@ mod tests {
         };
         assert!(!run(&resource)?.status.success());
         if let ResourceSource::GitRepository { checkout, .. } = &mut resource.definition.source {
-            *checkout = Some(GitCheckout::Commit { sha });
+            *checkout = Some(sha);
         }
         let output = run(&resource)?;
         ensure!(
@@ -237,11 +240,11 @@ mod tests {
             "{}",
             String::from_utf8_lossy(&output.stderr)
         );
-        let readme = std::path::Path::new(&resource.definition.mount_path).join("README");
+        let readme = std::path::Path::new(resource.definition.mount_path().as_ref()).join("README");
         assert_eq!(fs::read_to_string(&readme)?, "original");
         let cloned_git = |args: &[&str]| -> Result<String> {
             let result = Command::new("git")
-                .current_dir(&resource.definition.mount_path)
+                .current_dir(resource.definition.mount_path().as_ref())
                 .args(args)
                 .output()?;
             ensure!(
@@ -261,9 +264,7 @@ mod tests {
         assert!(run(&resource)?.status.success());
         assert_eq!(fs::read_to_string(&readme)?, "agent changes");
         if let ResourceSource::GitRepository { checkout, .. } = &mut resource.definition.source {
-            *checkout = Some(GitCheckout::Branch {
-                name: "main".into(),
-            });
+            *checkout = Some("main".into());
         }
         assert!(!run(&resource)?.status.success());
         assert_eq!(fs::read_to_string(readme)?, "agent changes");

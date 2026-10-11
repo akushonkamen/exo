@@ -1,8 +1,8 @@
 ---
 name: coder
 harness: codex
-config:
-  model: gpt-6.1-sol
+model:
+  name: gpt-6.1-sol
   credential: openai
 permission_policy: { type: always_allow }
 ---

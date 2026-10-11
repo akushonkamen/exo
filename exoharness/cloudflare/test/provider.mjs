@@ -395,7 +395,7 @@ const policy = (origin) => ({
   injection_location: { header: true },
 });
 const definition = (ask) =>
-  `---\nname: Test Agent\nharness: basic\nconfig:\n  model: test-model\n  base_url: https://model.example/v1\n  credential: OPENAI_API_KEY\npermission_policy: {type: ${ask ? "always_ask" : "always_allow"}}\n---\nUse shell to print Linux, then finish.`;
+  `---\nname: Test Agent\nharness: basic\nmodel:\n  name: test-model\n  base_url: https://model.example/v1\n  credential: OPENAI_API_KEY\npermission_policy: {type: ${ask ? "always_ask" : "always_allow"}}\n---\nUse shell to print Linux, then finish.`;
 async function create(ask = false, harness = "basic") {
   const agent = await api("agent", "POST", {
     slug: `agent-${crypto.randomUUID()}`,
@@ -925,7 +925,7 @@ test("Codex reuses its RPC process across turns and resumes after backend shutdo
   const { agent, thread, path } = await create(false, "codex");
   const streaming = await watch(path);
   const first = await sendTurn(path, "run tests");
-  assert.equal(first.harness, "codex-harness");
+  assert.equal(first.harness, "codex");
   const events = await waitTurn(path);
   await assertTurnInactive(agent, thread);
   assert.match(
@@ -1377,7 +1377,7 @@ test("Codex receives MCP configuration and Git resources through shared sandbox 
     .replace("harness: basic", "harness: codex")
     .replace(
       "permission_policy:",
-      "resources:\n  - name: repo\n    type: git_repository\n    url: https://github.com/example/project.git\n    credential: git\n    mount_path: /workspace\nmcp_servers:\n  - type: url\n    name: fixture\n    url: https://mcp.example/mcp\n    blocked_tools: [blocked]\n    permission_policy: {type: always_allow}\npermission_policy:",
+      "resources:\n  - name: repo\n    type: git\n    url: https://github.com/example/project.git\n    credential: git\n    mount_path: /workspace\nmcp_servers:\n  - type: url\n    name: fixture\n    url: https://mcp.example/mcp\n    blocked_tools: [blocked]\n    permission_policy: {type: always_allow}\npermission_policy:",
     );
   await api(`agent/${agent.id}/artifact`, "POST", {
     path: "managed-agents/agent.md",

@@ -57,7 +57,7 @@ pub(crate) fn worker_agent_config(
         "custom tools and adapters are not supported by this Worker"
     );
     ensure!(
-        f.config.braintrust.is_none(),
+        f.model.braintrust.is_none(),
         "Braintrust tracing is not configured on this Worker"
     );
     let config = agent_config_with_modules(definition, sandbox, None, None, &WorkerModules)?;
@@ -75,7 +75,7 @@ pub(crate) fn worker_agent_config(
     }
     ensure!(
         config.credential.is_some(),
-        "config.credential must name a credential in a selected vault"
+        "model.credential must name a credential in a selected vault"
     );
     Ok(config)
 }

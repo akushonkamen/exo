@@ -20,7 +20,7 @@ async function turn(content) {
     { input: { role: "user", content } },
     202,
   );
-  assert.equal(submitted.harness, "codex-harness");
+  assert.equal(submitted.harness, "codex");
   const events = await waitTurn(path, submitted.turn.id, 600);
   const started = events.find(
     (event) => event.data.event_type === "codex_turn_started",
