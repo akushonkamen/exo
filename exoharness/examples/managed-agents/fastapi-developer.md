@@ -8,7 +8,7 @@ resources:
   - name: code
     type: git
     url: https://github.com/fastapi/full-stack-fastapi-template
-    checkout: { type: branch, name: master }
+    checkout: master
     mount_path: /workspace
 ---
 

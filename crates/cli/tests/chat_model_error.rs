@@ -87,9 +87,9 @@ async fn chat_survives_model_call_failure() {
         &[
             "agent",
             "create",
-            "test-agent",
-            "--file",
             spec.to_str().unwrap(),
+            "--name",
+            "test-agent",
         ],
         &root,
         &xdg,

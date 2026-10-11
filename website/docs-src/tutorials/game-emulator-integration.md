@@ -321,7 +321,7 @@ model:
 ---
 Help the user with their task.
 EOF
-exo agent create gameboy --file gameboy.md
+exo agent create gameboy.md
 exo thread create gameboy "Play Pokemon"      # once
 
 exo thread send gameboy play-pokemon \
@@ -440,4 +440,4 @@ Point your **existing** agent record at the wrapper and it keeps its memory,
 artifacts, skills, and every conversation — it just gains a live view of the emulator, and tooling to press buttons:
 
 Set `harness` to the wrapper module path in the agent definition, then apply it
-with `exo agent update exo --file exo.md`. You can continue the existing thread.
+with `exo agent update exo.md`. You can continue the existing thread.

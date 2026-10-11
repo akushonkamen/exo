@@ -233,21 +233,19 @@ model:
 ---
 Help the user with their task.
 EOF
-exo agent create coder --file coder.md
+exo agent create coder.md
 exo thread create coder "Build" --slug coder-build
 cat > coding-environment.yaml <<'EOF'
 name: coding
-config:
-  provider: docker
-  image: python:3.12-slim
-  policy:
-    networking: {type: unrestricted}
+provider: docker
+image: python:3.12-slim
+networking: {type: unrestricted}
 EOF
 exo run coder --thread coder-build --environment-file coding-environment.yaml
 ```
 
 For custom harnesses, the default sandbox image is `ubuntu:24.04`, which is bare — no Python,
-Node, etc. Setting `config.image` in the environment file chooses the image
+Node, etc. Setting `image` in the environment file chooses the image
 for this thread; the model installs anything else it needs with the shell tool.
 
 A real run (via `thread send`), asking it to write a buggy

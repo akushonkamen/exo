@@ -74,7 +74,7 @@ external MCP servers, as in the Notion example above.
 Save an agent with a Git resource so every new thread starts with its own checkout:
 
 ```sh
-exo agent create exo-dev --file exoharness/examples/managed-agents/exo-developer.md
+exo agent create exoharness/examples/managed-agents/exo-developer.md --name exo-dev
 exo run exo-dev
 ```
 

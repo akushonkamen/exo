@@ -470,7 +470,6 @@ fn local_commands_resolve_agent_and_thread_aliases() -> Result<()> {
         thread,
     )?;
     for args in [
-        "agent update agent --file agent.md",
         "agent mount create agent /tmp /work",
         "thread fork agent thread",
         "thread update agent thread --model gpt-5-mini",

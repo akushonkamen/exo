@@ -115,9 +115,9 @@ async fn vault_credentials_stay_host_side_and_typescript_preserves_oauth_refresh
         vec![
             "agent",
             "create",
-            "saved",
-            "--file",
             definition.to_str().unwrap(),
+            "--name",
+            "saved",
         ],
         vec![
             "conversation",

@@ -16,15 +16,15 @@ async fn setup(provider: &str) -> Result<Fixture> {
     f.cli(&[
         "agent",
         "create",
-        "dev",
-        "--file",
         f.agent_file.to_str().context("agent file")?,
+        "--name",
+        "dev",
     ])
     .await?;
     let file = f.temp.path().join("environment.yaml");
     std::fs::write(
         &file,
-        "name: dev\nconfig:\n  provider: local_process\n  image: unused\n  tcp_ports: [5173, 8000]\n",
+        "name: dev\nprovider: local_process\nimage: unused\ntcp_ports: [5173, 8000]\n",
     )?;
     f.cli(&[
         "environment",
@@ -325,7 +325,7 @@ async fn inline_previews_keep_their_port_and_live_only_in_their_cli_process() ->
     let file = f.temp.path().join("environment.yaml");
     std::fs::write(
         &file,
-        "name: dev\nconfig:\n  provider: local_process\n  image: unused\n  tcp_ports: []\n",
+        "name: dev\nprovider: local_process\nimage: unused\ntcp_ports: []\n",
     )?;
     f.cli(&[
         "environment",
@@ -343,7 +343,7 @@ async fn inline_previews_keep_their_port_and_live_only_in_their_cli_process() ->
         .output(&["thread", "ports", "dev", "project"], None, None)
         .await?;
     assert!(!output.status.success());
-    assert!(String::from_utf8_lossy(&output.stderr).contains("declare config.tcp_ports"));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("declare tcp_ports"));
     let empty = open_session_on(&f, "project", None).await?;
     assert!(TcpStream::connect(("127.0.0.1", port)).await.is_err());
     close_session(empty).await?;

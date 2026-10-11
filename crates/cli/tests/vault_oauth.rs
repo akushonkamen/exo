@@ -771,9 +771,9 @@ async fn chat_vault_smoke_restart_second_vault_rotation_revocation_and_public_mc
     f.cli(&[
         "agent",
         "create",
-        "vault-smoke",
-        "--file",
         file.to_str().unwrap(),
+        "--name",
+        "vault-smoke",
     ])
     .await?;
     async fn chat(f: &Fixture, args: &[&str]) -> Result<std::process::Output> {

@@ -143,9 +143,9 @@ async fn pi_managed_local_and_http() -> Result<()> {
             }).mount(&mcp).await;
             std::fs::write(&f.agent_file, format!("---\nharness: pi\nmodel:\n  name: gpt-5-mini\n  credential: live-openai\npermission_policy: {{type: always_ask}}\nmcp_servers:\n  - type: url\n    name: verifier\n    url: {}/mcp\n---\nStart final replies with PI-READY. Use the requested tools and report their real results.\n", mcp.uri()))?;
             let environment = f.temp.path().join("pi.yaml");
-            std::fs::write(&environment, "name: pi\nconfig:\n  provider: apple_container\n  image: exo-pi-sandbox:latest\n  default_workdir: /home/exo/workspace\n  resources: {vcpu_count: 2, memory_mib: 2048}\n  policy:\n    networking: {type: unrestricted}\n  idle_seconds: 600\n")?;
+            std::fs::write(&environment, "name: pi\nprovider: apple_container\nimage: exo-pi-sandbox:latest\ndefault_workdir: /home/exo/workspace\nresources: {vcpu_count: 2, memory_mib: 2048}\nnetworking: {type: unrestricted}\nidle_seconds: 600\n")?;
             f.cli(&["environment", "create", "pi", "--file", environment.to_str().unwrap()]).await?;
-            f.cli(&["agent", "create", "pi-live", "--file", f.agent_file.to_str().unwrap()]).await?;
+            f.cli(&["agent", "create", f.agent_file.to_str().unwrap(), "--name", "pi-live"]).await?;
             let first = live(f, &["run", "pi-live", "--environment", "pi", "--prompt", "Call the verifier fetch_code tool. Use the native bash tool to write exactly its returned code to proof.txt in your working directory. Report the code and working directory."], &"a\n".repeat(20)).await?;
             ensure!(first.contains("/home/exo/workspace"), "environment working directory was ignored");
             ensure!(first.contains("PI-READY") && first.contains("exo-pi-verified-47"), "instructions or MCP result missing");
@@ -179,7 +179,7 @@ async fn pi_managed_local_and_http() -> Result<()> {
             ensure!(shell(thread.as_ref(), &sandbox, "test ! -e cancel.finished && ! pgrep -f '^sleep 113$'").await? == 0, "cancelled tool kept running");
             let followup = live(f, &["run", "pi-live", "--thread", slug, "--prompt", "The previous turn was cancelled. Use native read to inspect proof.txt and report its code."], &"y\n".repeat(20)).await?;
             ensure!(followup.contains("exo-pi-verified-47"), "follow-up after cancellation failed");
-            f.cli(&["agent", "create", "second", "--file", f.agent_file.to_str().unwrap()]).await?;
+            f.cli(&["agent", "create", f.agent_file.to_str().unwrap(), "--name", "second"]).await?;
             let independent = live(f, &["run", "second", "--environment", "pi", "--prompt", "Use bash to check whether proof.txt exists. Do not create it. Report the result."], &"y\n".repeat(20)).await?;
             let second_agent = exo_managed_agents::find_agent(f.runtime.exoharness_handle().as_ref(), "second").await?;
             let second_thread = exo_managed_agents::find_thread(second_agent.as_ref(), thread_slug(&independent)?).await?;
@@ -199,18 +199,18 @@ async fn container_environments_local_and_http() -> Result<()> {
             let shared = f.temp.path().join("shared");
             std::fs::create_dir(&shared)?;
             for name in ["first", "second"] {
-                f.cli(&["agent", "create", name, "--file", f.agent_file.to_str().unwrap()]).await?;
+                f.cli(&["agent", "create", f.agent_file.to_str().unwrap(), "--name", name]).await?;
             }
             let mut ids = std::collections::HashSet::new();
             for (agent_name, workdir) in [("first", "/home/exo/workspace"), ("first", "/home/exo/.pi"), ("second", "/home/exo/workspace")] {
                 let file = f.temp.path().join("environment.json");
                 std::fs::write(&file, serde_json::to_vec(&json!({
-                    "name": "container", "config": {
+                    "name": "container",
                         "provider": "apple_container", "image": "exo-pi-sandbox:latest", "default_workdir": workdir,
                         "resources": {"vcpu_count":2,"memory_mib":2048},
-                        "policy": {"networking":{"type":"disabled"}},
+                        "networking":{"type":"disabled"},
                         "file_system_mounts": [{"host_path": shared, "mount_path":"/shared","mode":"rw"}]
-                    }
+
                 }))?)?;
                 let output = live(f, &["run", agent_name, "--environment-file", file.to_str().unwrap(), "--prompt", "Reply without using tools."], "").await?;
                 let agent = exo_managed_agents::find_agent(f.runtime.exoharness_handle().as_ref(), agent_name).await?;
@@ -384,8 +384,8 @@ for (const dir of ['/tmp/exo-codex-home', '/home/exo/.codex', '/home/exo/.claude
                     success(f.command(&["--provider", "local", "vault", "secret", "create", "global", "live-model", "--token-env", "LIVE_MODEL_KEY", "--allow-origin", if variable == "ANTHROPIC_API_KEY" { "https://api.anthropic.com" } else { "https://api.openai.com" }]).env("LIVE_MODEL_KEY", &key).output().await?)?;
                     std::fs::write(&f.agent_file, format!("---\nharness: {harness}\nmodel:\n  name: {model}\n  credential: live-model\n---\nFollow the user request.\n"))?;
                     let environment = f.temp.path().join("environment.yaml");
-                    std::fs::write(&environment, format!("name: credential-test\nconfig:\n  provider: {backend}\n  image: {image}\n  default_workdir: /home/exo/workspace\n  resources: {{vcpu_count: 2, memory_mib: 2048}}\n  policy:\n    networking: {network}\n  idle_seconds: 600\n"))?;
-                    f.cli(&["agent", "create", "credential-test", "--file", f.agent_file.to_str().context("agent path")?]).await?;
+                    std::fs::write(&environment, format!("name: credential-test\nprovider: {backend}\nimage: {image}\ndefault_workdir: /home/exo/workspace\nresources: {{vcpu_count: 2, memory_mib: 2048}}\nnetworking: {network}\nidle_seconds: 600\n"))?;
+                    f.cli(&["agent", "create", f.agent_file.to_str().context("agent path")?, "--name", "credential-test"]).await?;
                     let first = live(f, &["run", "credential-test", "--environment-file", environment.to_str().context("environment path")?, "--prompt", "Reply exactly CREDENTIAL-PROXY-READY without using tools."], "").await?;
                     ensure!(first.contains("CREDENTIAL-PROXY-READY"), "agent response missing");
                     ensure!(!first.contains("Reconnecting..."), "agent retried an unsupported transport");
@@ -443,8 +443,8 @@ async fn native_mcp_workflow(
             success(f.command(&["--provider", "local", "vault", "secret", "create", "global", "native-key", "--token-env", "NATIVE_API_KEY", "--allow-origin", if variable == "ANTHROPIC_API_KEY" { "https://api.anthropic.com" } else { "https://api.openai.com" }]).env("NATIVE_API_KEY", &key).output().await?)?;
             std::fs::write(&f.agent_file, format!("---\nharness: {harness}\nmodel:\n  name: {model}\n  credential: native-key\nmcp_servers:\n  - type: url\n    name: wiki\n    url: https://mcp.deepwiki.com/mcp\n    allowed_tools: [read_wiki_structure]\n---\nUse the requested MCP tool. If permission is denied, stop; do not use another tool or retry.\n"))?;
             let environment = f.temp.path().join("native.yaml");
-            std::fs::write(&environment, format!("name: native\nconfig:\n  provider: apple_container\n  image: {image}\n  default_workdir: /home/exo/workspace\n  resources: {{vcpu_count: 2, memory_mib: 2048}}\n  policy:\n    networking: {{type: unrestricted}}\n"))?;
-            f.cli(&["agent", "create", "native-mcp", "--file", f.agent_file.to_str().context("agent path")?]).await?;
+            std::fs::write(&environment, format!("name: native\nprovider: apple_container\nimage: {image}\ndefault_workdir: /home/exo/workspace\nresources: {{vcpu_count: 2, memory_mib: 2048}}\nnetworking: {{type: unrestricted}}\n"))?;
+            f.cli(&["agent", "create", f.agent_file.to_str().context("agent path")?, "--name", "native-mcp"]).await?;
             let prompt = if harness == "codex" {
                 "Use Promise.all to call wiki read_wiki_structure twice in parallel, once for repoName openai/openai-python and once for repoName rust-lang/rust, then report the first section title from each result. Do not use shell, web search, or any other tools."
             } else {
@@ -488,9 +488,9 @@ async fn filesystem_resources_local_and_http() -> Result<()> {
             "---\nharness: basic\nmodel:\n  name: gpt-5-mini\n  credential: live-openai\nresources:\n  - name: code\n    type: git\n    path: {}\n    mount_path: /workspace\n  - name: fixtures\n    type: directory\n    path: {}\n    mount_path: /fixtures\n    mode: ro\n---\nHelp with the code in /workspace.\n", source.display(), fixture.display()
         ))?;
         let environment = f.temp.path().join("environment.yaml");
-        std::fs::write(&environment, "name: coder\nconfig:\n  provider: apple_container\n  image: exo-codex-sandbox:latest\n  enable_networking: true\n")?;
+        std::fs::write(&environment, "name: coder\nprovider: apple_container\nimage: exo-codex-sandbox:latest\nenable_networking: true\n")?;
         let environment = environment.to_str().unwrap();
-        f.cli(&["agent", "create", "coder", "--file", f.agent_file.to_str().unwrap()]).await?;
+        f.cli(&["agent", "create", f.agent_file.to_str().unwrap(), "--name", "coder"]).await?;
         let first = live(f, &["run", "coder", "--environment-file", environment, "--prompt", "Reply without using tools."], "").await?;
         let agent = exo_managed_agents::find_agent(f.runtime.exoharness_handle().as_ref(), "coder").await?;
         let thread = exo_managed_agents::find_thread(agent.as_ref(), thread_slug(&first)?).await?;
@@ -501,7 +501,7 @@ async fn filesystem_resources_local_and_http() -> Result<()> {
         let second_thread = exo_managed_agents::find_thread(agent.as_ref(), thread_slug(&second)?).await?;
         let second_sandbox = second_thread.list_sandboxes().await?[0].id.clone();
         ensure!(shell(second_thread.as_ref(), &second_sandbox, "test \"$(cat README)\" = original").await? == 0, "threads shared changes");
-        std::fs::write(environment, "name: coder\nconfig:\n  provider: apple_container\n  image: exo-codex-sandbox:latest\n  enable_networking: true\n  idle_seconds: 900\n")?;
+        std::fs::write(environment, "name: coder\nprovider: apple_container\nimage: exo-codex-sandbox:latest\nenable_networking: true\nidle_seconds: 900\n")?;
         live(f, &["run", "coder", "--thread", thread_slug(&first)?, "--environment-file", environment, "--prompt", "Reply without using tools."], "").await?;
         let sandbox = thread.list_sandboxes().await?.into_iter().find(|s| s.running).context("resumed sandbox")?.id;
         ensure!(shell(thread.as_ref(), &sandbox, "test \"$(cat README)\" = private").await? == 0, "resource edits were lost after sandbox replacement");

@@ -67,7 +67,7 @@ the model name for the thread and keeps its credential and endpoint.
 
 Codex, Claude Code, and Pi use digest-pinned devbox images by default. To develop
 the Codex image locally, build it and set
-`config.image: exo-codex-devbox:latest` in an environment definition:
+`image: exo-codex-devbox:latest` in an environment definition:
 
 ```bash
 docker build --build-arg DEVBOX_TOOLS=true -t exo-codex-devbox:latest \
@@ -101,9 +101,8 @@ Declare guest TCP ports in the environment:
 
 ```yaml
 name: dev
-config:
-  image: my-dev-image
-  tcp_ports: [5173, 8000]
+image: my-dev-image
+tcp_ports: [5173, 8000]
 ```
 
 `exo run` prints a services page such as
@@ -146,7 +145,7 @@ so the same agent can run in different environments.
 To save an agent under a name:
 
 ```bash
-exo agent create support --file exoharness/examples/managed-agents/support-analyst.md
+exo agent create exoharness/examples/managed-agents/support-analyst.md --name support
 exo agent list
 exo run support
 exo thread list support
@@ -166,7 +165,7 @@ thread.
 Select VM settings explicitly with `--environment NAME`:
 
 ```bash
-exo agent create support --file agent.md
+exo agent create agent.md --name support
 exo environment create local-dev --file environment.yaml
 exo run support --environment local-dev --thread my-project
 ```
@@ -191,12 +190,14 @@ stops leftover managed sandboxes before resuming. Attached sandboxes keep their
 external owner. One `exo run --serve` process may supervise adapters per state root.
 
 Each `exo run FILE.md` invocation creates or updates a saved agent from the Markdown
-file, then starts a saved thread. The agent slug combines the filename with a hash
-of its canonical absolute path; rerunning the same file reuses the agent and
-replaces its saved definition. Moving the file creates a different agent. Add
+file, then starts a saved thread. The name comes from `--name`, optional frontmatter
+`name:`, then the filename without `.md`. The slug derives from the name, or uses
+`--slug` when supplied. Rerunning a file with the same slug reuses the agent and
+replaces its saved definition. Add
 `--thread <slug>` to resume a saved thread. Agents and history remain until deleted.
 
-Use `exo agent create` to save an agent with an explicit name and `exo run NAME` to run it without syncing a file. Named creation rejects an existing name.
+Use `exo agent create FILE.md` to save an agent and `exo run NAME` to run it without syncing a file. Creation rejects an existing slug;
+`exo agent update FILE.md` requires an existing agent. Both use the same name and slug rules as `run`.
 Editing or deleting the source Markdown has no effect until it is synced again. `--model` overrides the model for a thread;
 `--harness` can override the harness when loading a file. Saved agents keep their
 harness.
@@ -209,7 +210,7 @@ must be installed on the provider; the spec does not bundle their code.
 
 ## Specs and credentials
 
-`exo agent update NAME --file agent.md` replaces the saved spec. It preserves
+`exo agent update agent.md --name NAME` replaces the saved spec. It preserves
 threads and restores the previous spec if the provider rejects the update.
 `exo agent get NAME` shows the saved spec and resolved harness configuration.
 
@@ -371,14 +372,14 @@ exo run exoharness/examples/managed-agents/pi-assistant.md \
   --environment pi-local
 ```
 
-The example uses Apple container. Change `config.provider` to `docker` on Linux.
-`config.image` names the container image (a tag or digest). With SmolVM on macOS,
+The example uses Apple container. Change `provider` to `docker` on Linux.
+`image` names the container image (a tag or digest). With SmolVM on macOS,
 Exo imports matching images from the local Docker store into its private cache;
 registry images are handled by SmolVM. You do not need to export an archive.
 Building an image remains a separate step from selecting it in the environment.
 The Codex example at `exoharness/examples/environments/codex-smolvm.yaml` uses
 the published `ghcr.io/exoharness/codex-devbox:latest`. To use a locally built
-image instead, change its `config.image` to `exo-codex-devbox:latest`.
+image instead, change its `image` to `exo-codex-devbox:latest`.
 Definitions forward the existing sandbox settings: `provider`, `image`,
 `resources`, `default_workdir`, `file_system_mounts`, `durable_file_systems`, `tcp_ports`, `policy`,
 `enable_networking`, and `idle_seconds`. `policy.networking` takes precedence over
@@ -428,7 +429,7 @@ on port 5173, an API on port 8000, and PostgreSQL inside the VM. With an OpenAI
 credential saved as `openai` in the global vault, run from this checkout:
 
 ```sh
-exo agent create fastapi-dev --file exoharness/examples/managed-agents/fastapi-developer.md
+exo agent create exoharness/examples/managed-agents/fastapi-developer.md --name fastapi-dev
 exo environment create fastapi-local --file exoharness/examples/environments/fastapi-smolvm.yaml
 exo run fastapi-dev --environment fastapi-local --thread demo
 ```
@@ -650,7 +651,7 @@ The same CLI commands drive local Exo and an HTTP runtime:
 exo provider create local --local-root .exo
 exo provider create oss --url http://localhost:8080/exo
 exo provider switch oss
-exo agent create analyst --file ./analyst.md
+exo agent create ./analyst.md
 exo run analyst --prompt "Summarize this project"
 exo thread list analyst
 exo run analyst --thread <thread-slug>

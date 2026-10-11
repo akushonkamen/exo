@@ -1326,7 +1326,9 @@ async fn host_configuration_requires_the_operator() -> Result<()> {
     );
     let environment = exoharness::EnvironmentDefinition {
         name: "published".into(),
-        config: serde_json::from_value(json!({ "provider": "local-process", "image": "local" }))?,
+        provider: exoharness::SandboxProvider::LocalProcess,
+        image: "local".into(),
+        ..Default::default()
     };
     assert!(
         runtime

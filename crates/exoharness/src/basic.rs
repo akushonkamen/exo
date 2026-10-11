@@ -1508,10 +1508,10 @@ impl ConversationHandle for BasicConversationHandle {
             let replace_sandboxes = record
                 .environment
                 .as_ref()
-                .is_none_or(|previous| previous.config != environment.config);
+                .is_none_or(|previous| previous != &environment);
             if replace_sandboxes {
                 #[cfg(feature = "basic-backend")]
-                self.check_resource_environment(&environment.config.provider)?;
+                self.check_resource_environment(&environment.provider)?;
                 let scope = self.sandbox_handle();
                 for sandbox in scope.list_sandboxes().await? {
                     scope.terminate_sandbox_locked(sandbox.id).await?;

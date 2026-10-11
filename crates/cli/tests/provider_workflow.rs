@@ -20,7 +20,7 @@ async fn local_and_http_cli_workflows() -> Result<()> {
         let file = f.agent_file.to_str().unwrap();
         f.cli(&["provider", "switch", provider]).await?;
         let created = mutation_output(
-            f.output(&["agent", "create", "saved", "--file", file], None, None)
+            f.output(&["agent", "create", file, "--name", "saved"], None, None)
                 .await?,
             provider,
         )?;
@@ -40,7 +40,7 @@ async fn local_and_http_cli_workflows() -> Result<()> {
                 std::fs::write(&invalid, source)?;
                 assert!(
                     !f.output(
-                        &["agent", "create", name, "--file", invalid.to_str().unwrap()],
+                        &["agent", "create", invalid.to_str().unwrap(), "--name", name],
                         None,
                         None
                     )
@@ -123,9 +123,9 @@ async fn local_and_http_threads_accept_additional_vaults() -> Result<()> {
         f.cli(&[
             "agent",
             "create",
-            "saved",
-            "--file",
             f.agent_file.to_str().unwrap(),
+            "--name",
+            "saved",
         ])
         .await?;
         // Arrange records without claiming them for the server. The selected
@@ -256,7 +256,20 @@ async fn local_and_http_file_runs_sync_saved_agents_and_preserve_history() -> Re
             .pop()
             .context("saved file agent")?;
         let slug = &agent.record().slug;
+        assert_eq!(slug, "agent");
         let first_thread = thread_slug(&first)?;
+        assert!(
+            !f.output(&["agent", "create", file], None, None)
+                .await?
+                .status
+                .success()
+        );
+        assert!(
+            !f.output(&["agent", "update", file, "--name", "missing"], None, None)
+                .await?
+                .status
+                .success()
+        );
         assert!(f.cli(&["agent", "list"]).await?.contains(slug));
         assert_eq!(
             executor::load_agent_config(agent.as_ref())
@@ -269,6 +282,11 @@ async fn local_and_http_file_runs_sync_saved_agents_and_preserve_history() -> Re
             .source()
             .replace("Reply to the user.", "Follow the updated instructions.");
         std::fs::write(&f.agent_file, &updated)?;
+        f.cli(&["agent", "update", file]).await?;
+        assert_eq!(
+            f.runtime.get_agent(slug).await?.unwrap().record().id,
+            agent.record().id
+        );
         let directory = f.temp.path().join("nested");
         std::fs::create_dir(&directory)?;
         let second = success(
@@ -365,6 +383,16 @@ async fn local_and_http_file_runs_sync_saved_agents_and_preserve_history() -> Re
             "other file input",
         ])
         .await?;
+        assert_eq!(f.runtime.list_agents().await?.len(), 1);
+        f.cli(&[
+            "run",
+            other.to_str().context("other file")?,
+            "--slug",
+            "other",
+            "--prompt",
+            "distinct agent input",
+        ])
+        .await?;
         let agents = f.runtime.list_agents().await?;
         assert_eq!(agents.len(), 2);
         assert_ne!(agents[0].slug, agents[1].slug);
@@ -423,9 +451,9 @@ async fn provider_crud_defaults_and_aliases_survive_cli_restarts() -> Result<()>
     f.cli(&[
         "agent",
         "create",
-        "pinned",
-        "--file",
         f.agent_file.to_str().unwrap(),
+        "--name",
+        "pinned",
     ])
     .await?;
     let first = f.cli(&["run", "pinned", "--prompt", "hello"]).await?;
@@ -577,9 +605,9 @@ async fn local_and_http_live_cancellation_finalizes_and_allows_resume() -> Resul
         f.cli(&[
             "agent",
             "create",
-            "saved",
-            "--file",
             f.agent_file.to_str().unwrap(),
+            "--name",
+            "saved",
         ])
         .await?;
         let delay = Mock::given(method("POST"))
@@ -676,9 +704,9 @@ async fn saved_http_turn_survives_cli_disconnect_and_another_file_run() -> Resul
     f.cli(&[
         "agent",
         "create",
-        "saved",
-        "--file",
         f.agent_file.to_str().unwrap(),
+        "--name",
+        "saved",
     ])
     .await?;
     let delay = Mock::given(method("POST"))
@@ -815,9 +843,9 @@ async fn local_and_http_providers_configure_named_harnesses() -> Result<()> {
             f.cli(&[
                 "agent",
                 "create",
-                &name,
-                "--file",
                 f.agent_file.to_str().unwrap(),
+                "--name",
+                &name,
             ])
             .await?;
             let state = f.runtime.exoharness_handle();
@@ -944,9 +972,9 @@ export default defineHarness({{
     f.cli(&[
         "agent",
         "create",
-        "remote-workspace",
-        "--file",
         f.agent_file.to_str().unwrap(),
+        "--name",
+        "remote-workspace",
     ])
     .await?;
     let state = f.runtime.exoharness_handle();
@@ -1004,7 +1032,7 @@ export default defineHarness({{
         ])
         .await?;
     assert!(file_run.contains("Other workspace"), "{file_run}");
-    assert!(f.cli(&["agent", "list"]).await?.contains("agent-"));
+    assert!(f.cli(&["agent", "list"]).await?.contains("agent "));
     assert!(!f.root.exists(), "remote execution created local state");
     assert!(f.model.received_requests().await.unwrap().is_empty());
     success(
@@ -1325,9 +1353,9 @@ async fn saved_aliases_keep_their_context_after_profile_and_selection_changes() 
     f.cli(&[
         "agent",
         "create",
-        "pinned-context",
-        "--file",
         f.agent_file.to_str().unwrap(),
+        "--name",
+        "pinned-context",
     ])
     .await?;
     let first = f

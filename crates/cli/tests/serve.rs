@@ -11,7 +11,7 @@ async fn serve_exposes_the_shared_client_api_and_isolates_the_selected_agent() -
     let f = Fixture::new().await?;
     let file = f.agent_file.to_str().context("agent file")?;
     for name in ["served", "other"] {
-        f.cli(&["agent", "create", name, "--file", file]).await?;
+        f.cli(&["agent", "create", file, "--name", name]).await?;
     }
     let state = f.runtime.exoharness_handle();
     let selected = exo_managed_agents::find_agent(state.as_ref(), "served").await?;
@@ -60,7 +60,7 @@ async fn serve_exposes_the_shared_client_api_and_isolates_the_selected_agent() -
         .put(format!("{endpoint}/environment"))
         .json(&serde_json::json!({
             "name": "forbidden",
-            "config": {"provider": "local_process", "image": "unused"}
+            "provider": "local_process", "image": "unused"
         }))
         .send()
         .await?;

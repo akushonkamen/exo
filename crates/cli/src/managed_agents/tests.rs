@@ -15,6 +15,56 @@ use super::*;
 
 const SOURCE: &str = "---\nharness: basic\nmodel:\n  name: gpt-5.4\n  credential: test-openai\n---\n\nInvestigate support tickets.\n";
 
+#[test]
+fn agent_identity_uses_explicit_name_then_frontmatter_then_filename() -> Result<()> {
+    let temp = TempDir::new()?;
+    let file = temp.path().join("support-analyst.md");
+    std::fs::write(&file, SOURCE)?;
+    let mut definition = AgentDefinition::load(&file)?;
+    for (frontmatter, name, slug, expected) in [
+        (None, None, None, ("support-analyst", "support-analyst")),
+        (
+            Some("Support desk"),
+            None,
+            None,
+            ("Support desk", "support-desk"),
+        ),
+        (
+            Some("Support desk"),
+            Some("My agent"),
+            None,
+            ("My agent", "my-agent"),
+        ),
+        (
+            Some("Support desk"),
+            Some("My agent"),
+            Some("triage"),
+            ("My agent", "triage"),
+        ),
+    ] {
+        definition.frontmatter.name = frontmatter.map(str::to_owned);
+        let args = AgentNameArgs {
+            name: name.map(str::to_owned),
+            slug: slug.map(str::to_owned),
+        };
+        assert_eq!(
+            args.resolve(&definition)?,
+            (expected.0.into(), expected.1.into())
+        );
+    }
+    for name in ["", "   ", "!!!"] {
+        assert!(
+            AgentNameArgs {
+                name: Some(name.into()),
+                ..Default::default()
+            }
+            .resolve(&definition)
+            .is_err()
+        );
+    }
+    Ok(())
+}
+
 #[derive(Default)]
 struct RecordingModel {
     requests: Mutex<Vec<ModelRequest>>,
@@ -131,6 +181,7 @@ async fn open_configured_thread(
 
 fn thread_args(agent: &str) -> ThreadArgs {
     ThreadArgs {
+        identity: AgentNameArgs::default(),
         environment: None,
         environment_file: None,
         agent: Some(agent.to_string()),
@@ -254,6 +305,7 @@ async fn file_runs_reuse_saved_agents_and_mounts_stay_on_threads() -> Result<()>
     let (first, thread) =
         open_configured_thread(runtime.as_ref(), Some(&definition), &args).await?;
     assert_eq!(first.record().name, "agent");
+    assert_eq!(first.record().slug, "agent");
     assert_eq!(first.record().id, synced.record().id);
     let (second, second_thread) =
         open_configured_thread(runtime.as_ref(), Some(&definition), &args).await?;

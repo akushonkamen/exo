@@ -297,7 +297,7 @@ impl Runtime {
             .record()
             .environment
             .as_ref()
-            .is_none_or(|env| env.config.tcp_ports.is_empty())
+            .is_none_or(|env| env.tcp_ports.is_empty())
         {
             return Ok(());
         }
@@ -593,7 +593,8 @@ impl Runtime {
                     };
                     locations.push_str(&format!(
                         "- {}: {:?} ({mode})\n",
-                        resource.name, resource.mount_path
+                        resource.name,
+                        resource.mount_path()
                     ));
                 }
                 agent_config

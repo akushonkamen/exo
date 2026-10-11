@@ -135,9 +135,9 @@ async fn conversation_send_round_trips_through_real_sandbox_and_mocked_openai() 
         &[
             "agent",
             "create",
-            "test-agent",
-            "--file",
             spec.to_str().unwrap(),
+            "--name",
+            "test-agent",
         ],
         &root,
         &xdg,

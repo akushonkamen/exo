@@ -214,7 +214,7 @@ model:
 ---
 Help the user with their task.
 EOF
-exo agent create sysmon --file sysmon.md
+exo agent create sysmon.md
 exo thread create sysmon "Sysmon Test"
 exo run sysmon --thread sysmon-test
 ```

@@ -11,15 +11,14 @@ async fn named_threads_keep_history_and_explicit_environment_for_local_and_http(
         f.cli(&[
             "agent",
             "create",
-            "braintrust-dev",
-            "--file",
             f.agent_file.to_str().context("agent path")?,
+            "--name",
+            "braintrust-dev",
         ])
         .await?;
         let environment_file = f.temp.path().join("environment.yaml");
-        let environment: exoharness::EnvironmentDefinition = serde_yaml_ng::from_str(
-            "name: local-dev\nconfig:\n  provider: local_process\n  image: unused\n",
-        )?;
+        let environment: exoharness::EnvironmentDefinition =
+            serde_yaml_ng::from_str("name: local-dev\nprovider: local_process\nimage: unused\n")?;
         std::fs::write(&environment_file, serde_yaml_ng::to_string(&environment)?)?;
         f.cli(&[
             "environment",
@@ -123,7 +122,7 @@ async fn explicit_egress_policy_conflicting_with_environment_is_rejected() -> Re
     let environment_file = f.temp.path().join("environment.json");
     std::fs::write(
         &environment_file,
-        r#"{"name":"dev","config":{"provider":"local_process","image":"unused","policy":{"networking":{"type":"unrestricted"}}}}"#,
+        r#"{"name":"dev","provider":"local_process","image":"unused","networking":{"type":"unrestricted"}}"#,
     )?;
     let policy_file = f.temp.path().join("egress.json");
     std::fs::write(
@@ -160,9 +159,9 @@ async fn explicit_egress_policy_conflicting_with_environment_is_rejected() -> Re
     f.cli(&[
         "agent",
         "create",
-        "saved",
-        "--file",
         f.agent_file.to_str().context("agent path")?,
+        "--name",
+        "saved",
     ])
     .await?;
     f.cli(&["thread", "create", "saved", "Saved", "--slug", "saved"])
@@ -199,7 +198,7 @@ async fn explicit_egress_policy_conflicting_with_environment_is_rejected() -> Re
     let plain_environment = f.temp.path().join("plain-environment.json");
     std::fs::write(
         &plain_environment,
-        r#"{"name":"plain","config":{"provider":"local_process","image":"unused"}}"#,
+        r#"{"name":"plain","provider":"local_process","image":"unused"}"#,
     )?;
     f.cli(&[
         "thread", "create", "saved", "Selected", "--slug", "selected",
@@ -234,9 +233,9 @@ async fn thread_mount_commands_reject_environment_overrides_without_mutating_sta
     f.cli(&[
         "agent",
         "create",
-        "saved",
-        "--file",
         f.agent_file.to_str().context("agent path")?,
+        "--name",
+        "saved",
     ])
     .await?;
     let workspace = f.temp.path().join("workspace");
@@ -245,12 +244,11 @@ async fn thread_mount_commands_reject_environment_overrides_without_mutating_sta
     let host = workspace.to_str().context("workspace path")?;
     let environment: exoharness::EnvironmentDefinition =
         serde_json::from_value(serde_json::json!({
-            "name": "dev", "config": {
-                "provider": "docker", "image": "unused",
-                "file_system_mounts": [{
-                    "host_path": host, "mount_path": "/workspace", "mode": "rw",
-                }],
-            }
+            "name": "dev",
+            "provider": "docker", "image": "unused",
+            "file_system_mounts": [{
+                "host_path": host, "mount_path": "/workspace", "mode": "rw",
+            }],
         }))?;
     let file = f.temp.path().join("environment.json");
     std::fs::write(&file, serde_json::to_string(&environment)?)?;
@@ -270,7 +268,7 @@ async fn thread_mount_commands_reject_environment_overrides_without_mutating_sta
     let agent =
         exo_managed_agents::find_agent(f.runtime.exoharness_handle().as_ref(), "saved").await?;
     let thread = exo_managed_agents::find_thread(agent.as_ref(), "guarded").await?;
-    let mounts = environment.config.file_system_mounts.as_ref().unwrap();
+    let mounts = environment.file_system_mounts.as_ref().unwrap();
     assert_eq!(
         executor::load_conversation_config(thread.as_ref())
             .await?
@@ -357,10 +355,9 @@ async fn environments_reconcile_saved_threads_locally_and_over_http() -> Result<
         std::fs::create_dir(&workspace)?;
         let mut environment: exoharness::EnvironmentDefinition =
             serde_json::from_value(serde_json::json!({
-                "name": "dev", "config": {
-                    "provider": "local_process", "image": "unused", "default_workdir": workspace,
-                    "enable_networking": true, "idle_seconds": 600,
-                }
+                "name": "dev",
+                "provider": "local_process", "image": "unused", "default_workdir": workspace,
+                "enable_networking": true, "idle_seconds": 600,
             }))?;
         let file = f.temp.path().join("environment.yaml");
         std::fs::write(&file, serde_yaml_ng::to_string(&environment)?)?;
@@ -389,7 +386,7 @@ async fn environments_reconcile_saved_threads_locally_and_over_http() -> Result<
         assert!(f.cli(&["environment", "list"]).await?.contains("dev"));
         assert!(f.cli(&["environment", "get", "dev"]).await?.contains("600"));
         let agent_file = f.agent_file.to_str().context("agent path")?;
-        f.cli(&["agent", "create", "saved", "--file", agent_file])
+        f.cli(&["agent", "create", agent_file, "--name", "saved"])
             .await?;
         let output = f
             .cli(&["run", "saved", "--environment", "dev", "--prompt", "first"])
@@ -416,8 +413,8 @@ async fn environments_reconcile_saved_threads_locally_and_over_http() -> Result<
                 _ => None,
             })
             .context("environment sandbox")?;
-        environment.config.image = "updated-image".into();
-        environment.config.idle_seconds = Some(900);
+        environment.image = "updated-image".into();
+        environment.idle_seconds = Some(900);
         std::fs::write(&file, serde_yaml_ng::to_string(&environment)?)?;
         f.cli(&["environment", "update", "dev", "--file", path])
             .await?;
@@ -501,12 +498,8 @@ async fn environments_reconcile_saved_threads_locally_and_over_http() -> Result<
             .await?;
         assert!(file_run.contains("Workflow reply."));
         let mut unsupported = environment.clone();
-        unsupported.config.policy = Some(exoharness::EgressPolicy {
-            allowed_tcp_ports: None,
-            networking: exoharness::SandboxNetworkPolicy::Limited {
-                allowed_hosts: vec!["example.com".into()],
-            },
-            credentials: vec![],
+        unsupported.networking = Some(exoharness::SandboxNetworkPolicy::Limited {
+            allowed_hosts: vec!["example.com".into()],
         });
         std::fs::write(&file, serde_yaml_ng::to_string(&unsupported)?)?;
         let requests_before = f.model.received_requests().await.unwrap().len();

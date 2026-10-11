@@ -76,7 +76,7 @@ model:
 ---
 Help the user with their task.
 EOF
-./target/debug/exo agent create ts-codex --file ts-codex.md
+./target/debug/exo agent create ts-codex.md
 
 ./target/debug/exo thread create ts-codex
 ./target/debug/exo thread mount create ts-codex <conversation> "$PWD" /workspace --rw
@@ -112,7 +112,7 @@ model:
 ---
 Help the user with their task.
 EOF
-./target/debug/exo agent create ts-claude-code --file ts-claude-code.md
+./target/debug/exo agent create ts-claude-code.md
 
 ./target/debug/exo thread create ts-claude-code
 ./target/debug/exo thread mount create ts-claude-code <conversation> "$PWD" /workspace --rw
@@ -149,7 +149,7 @@ model:
 ---
 Help the user with their task.
 EOF
-./target/debug/exo agent create ts-cursor --file ts-cursor.md
+./target/debug/exo agent create ts-cursor.md
 
 ./target/debug/exo thread create ts-cursor
 ./target/debug/exo thread mount create ts-cursor <conversation> "$PWD" /workspace --rw
@@ -188,7 +188,7 @@ model:
 ---
 Help the user with their task.
 EOF
-./target/debug/exo agent create ts-pi --file ts-pi.md
+./target/debug/exo agent create ts-pi.md
 
 ./target/debug/exo thread create ts-pi
 ./target/debug/exo thread mount create ts-pi <conversation> "$PWD" /workspace --rw

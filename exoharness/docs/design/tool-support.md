@@ -1040,7 +1040,7 @@ model:
 ---
 Help the user with their task.
 EOF
-exo agent create irc-agent --file irc-agent.md
+exo agent create irc-agent.md
 ```
 
 If the IRC server requires a password or NickServ token, store it as a normal

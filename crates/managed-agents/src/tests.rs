@@ -2,9 +2,31 @@ use super::*;
 
 #[test]
 fn resource_declarations_validate_sources_and_mounts() -> Result<()> {
-    let source = SOURCE.replace("model:\n", "resources:\n  - name: code\n    type: git\n    url: https://github.com/exoharness/exo\n    checkout: {type: branch, name: main}\n    credential: github\n    mount_path: /workspace\n  - name: data\n    type: directory\n    path: ./fixtures\n    mount_path: /data\n    mode: ro\nmodel:\n");
+    let source = SOURCE.replace("model:\n", "resources:\n  - name: code\n    type: git\n    url: https://github.com/exoharness/exo\n    checkout: main\n    credential: github\n    mount_path: /workspace\n  - name: data\n    type: directory\n    path: ./fixtures\n    mount_path: /data\n    mode: ro\nmodel:\n");
     let definition = AgentDefinition::parse(source.clone())?;
     assert_eq!(definition.frontmatter.resources.len(), 2);
+    let default_mount = AgentDefinition::parse(source.replace("    mount_path: /workspace\n", ""))?;
+    assert_eq!(
+        default_mount.frontmatter.resources[0].mount_path(),
+        "/workspace/code"
+    );
+    let prepared = exoharness::resources::PreparedResource {
+        definition: default_mount.frontmatter.resources[0].clone(),
+        snapshot: None,
+    };
+    let mut explicit_mount = prepared.clone();
+    explicit_mount.definition.mount_path = Some("/workspace/code".into());
+    assert!(prepared.same_workspace(&explicit_mount));
+    explicit_mount.definition.mount_path = Some("/elsewhere".into());
+    assert!(!prepared.same_workspace(&explicit_mount));
+    assert!(
+        AgentDefinition::parse(
+            source
+                .replace("mount_path: /data", "mount_path: /workspace/code")
+                .replace("    mount_path: /workspace\n", "")
+        )
+        .is_err()
+    );
     for invalid in [
         source.replace(
             "https://github.com/exoharness/exo",
@@ -15,6 +37,10 @@ fn resource_declarations_validate_sources_and_mounts() -> Result<()> {
         source.replace("name: data", "name: ../data"),
         source.replace("path: ./fixtures", "path: ./fixtures\n    typo: value"),
         source.replace("type: git", "type: git\n    path: ./repo"),
+        source.replace("type: git", "type: git_repository"),
+        source.replace("checkout: main", "checkout: {type: branch, name: main}"),
+        source.replace("checkout: main", "checkout: HEAD~1"),
+        source.replace("    mount_path: /data\n", ""),
     ] {
         assert!(AgentDefinition::parse(invalid).is_err());
     }

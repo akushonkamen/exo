@@ -49,7 +49,7 @@ exo run agent.md --egress-policy egress.json \
   --sandbox firecracker --sandbox-image /var/lib/exo/firecracker/rootfs.ext4
 ```
 
-An environment that sets `config.policy` cannot also be used with
+An environment that sets `networking` cannot also be used with
 `--egress-policy`. Put the credential bindings in the environment policy, or
 use sandbox options as above. Include the model API host in a limited network
 policy so the agent can call its model.

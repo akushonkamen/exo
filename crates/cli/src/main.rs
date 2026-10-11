@@ -603,17 +603,15 @@ enum AgentCommands {
     List,
     /// Save an agent from a Markdown spec.
     Create {
-        name: String,
-        #[arg(long)]
         file: PathBuf,
-        #[arg(long)]
-        slug: Option<String>,
+        #[command(flatten)]
+        identity: managed_agents::AgentNameArgs,
     },
     /// Replace a saved agent's spec.
     Update {
-        agent: String,
-        #[arg(long)]
         file: PathBuf,
+        #[command(flatten)]
+        identity: managed_agents::AgentNameArgs,
     },
     Mount {
         #[command(subcommand)]
@@ -1158,10 +1156,9 @@ async fn run_selected(
                         .collect(),
                 )?;
             }
-            AgentCommands::Create { name, file: _, slug } => {
-                let slug = slug.unwrap_or_else(|| slugify(&name));
-                anyhow::ensure!(!slug.is_empty(), "agent slug resolved to an empty value");
+            AgentCommands::Create { identity, file: _ } => {
                 let definition = definition.as_ref().context("agent spec is required")?;
+                let (name, slug) = identity.resolve(definition)?;
                 if selected_provider.is_some() {
                     provider_store.ensure_agent_alias_available(&slug)?;
                 }
@@ -1172,10 +1169,12 @@ async fn run_selected(
                 }
                 println!("created agent {} ({})", agent.record().slug, agent.record().id);
             }
-            AgentCommands::Update { agent, file: _ } => {
-                let agent = must_get_agent(harness.as_ref(), &agent).await?;
+            AgentCommands::Update { identity, file: _ } => {
+                let definition = definition.as_ref().context("agent spec is required")?;
+                let (_, slug) = identity.resolve(definition)?;
+                let agent = must_get_agent(harness.as_ref(), &slug).await?;
                 eprintln!("Preparing agent resources...");
-                harness.update_managed_agent(&agent, definition.as_ref().context("agent spec is required")?).await?;
+                harness.update_managed_agent(&agent, definition).await?;
                 println!("updated agent {}", agent.record().slug);
             }
             AgentCommands::Mount { command } => match command {
@@ -1912,15 +1911,15 @@ fn command_refs_mut(command: &mut Commands) -> (Option<&mut String>, Option<&mut
             )
         }
         Commands::Agent { command, .. } => match command {
-            AgentCommands::Update { agent, .. }
-            | AgentCommands::Get { agent }
-            | AgentCommands::Delete { agent } => (Some(agent), None),
+            AgentCommands::Get { agent } | AgentCommands::Delete { agent } => (Some(agent), None),
             AgentCommands::Mount { command } => match command {
                 AgentMountCommands::List { agent }
                 | AgentMountCommands::Create { agent, .. }
                 | AgentMountCommands::Delete { agent, .. } => (Some(agent), None),
             },
-            AgentCommands::List | AgentCommands::Create { .. } => (None, None),
+            AgentCommands::List | AgentCommands::Create { .. } | AgentCommands::Update { .. } => {
+                (None, None)
+            }
         },
         Commands::Conversation { command, .. } => match command {
             ConversationCommands::List { agent } | ConversationCommands::Create { agent, .. } => {
@@ -2380,8 +2379,8 @@ mod command_tests {
             assert!(Cli::try_parse_from(["exo", command]).is_err());
         }
         for args in [
-            vec!["agent", "create", "support", "--file", "agent.md"],
-            vec!["agent", "update", "support", "--file", "agent.md"],
+            vec!["agent", "create", "agent.md", "--name", "support"],
+            vec!["agent", "update", "agent.md", "--name", "support"],
             vec!["run", "--serve", "support"],
             vec!["run", "--serve"],
             vec!["run", "agent.md", "--serve"],

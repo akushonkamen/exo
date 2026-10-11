@@ -176,7 +176,7 @@ async fn applying_an_environment_preserves_thread_mounts() -> Result<()> {
         .await?;
 
     let environment: exoharness::EnvironmentDefinition = serde_json::from_str(
-        r#"{"name":"dev","config":{"provider":"local_process","image":"unused","file_system_mounts":[{"host_path":"/host/workspace","mount_path":"/workspace","mode":"rw"}]}}"#,
+        r#"{"name":"dev","provider":"local_process","image":"unused","file_system_mounts":[{"host_path":"/host/workspace","mount_path":"/workspace","mode":"rw"}]}"#,
     )?;
     runtime
         .open_managed_thread(
@@ -198,7 +198,7 @@ async fn applying_an_environment_preserves_thread_mounts() -> Result<()> {
     assert!(mounts.iter().any(|mount| mount.mount_path == "/workspace"));
 
     let mut updated_environment = environment;
-    updated_environment.config.file_system_mounts = Some(vec![FileSystemMount {
+    updated_environment.file_system_mounts = Some(vec![FileSystemMount {
         host_path: "/host/other".into(),
         mount_path: "/other".into(),
         mode: FileSystemMountMode::ReadWrite,

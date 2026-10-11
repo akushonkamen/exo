@@ -62,7 +62,7 @@ model:
 ---
 Help the user with their task.
 EOF
-exo agent create gameboy --file gameboy.md
+exo agent create gameboy.md
 exo thread create gameboy "Play Pokemon"
 exo thread send gameboy play "Play Pokemon Red. Get through the intro and pick a starter."
 ```

@@ -156,28 +156,25 @@ impl AgentBackend for LocalProvider {
             );
             let mut mounts = config.mounts;
             if let Some(previous) = &config.environment
-                && let Some(previous_mounts) = &previous.config.file_system_mounts
+                && let Some(previous_mounts) = &previous.file_system_mounts
             {
                 for mount in previous_mounts {
                     mounts.retain(|other| other.mount_path != mount.mount_path);
                 }
             }
-            for mount in environment.config.file_system_mounts.iter().flatten() {
+            for mount in environment.file_system_mounts.iter().flatten() {
                 mounts.retain(|other| other.mount_path != mount.mount_path);
                 mounts.push(mount.clone());
             }
             config.environment = Some(environment.clone());
-            if environment.config.policy.is_some() {
+            if environment.policy().is_some() {
                 config.egress_policy = None;
             }
-            config.sandbox_provider = Some(environment.config.provider.clone());
-            config.sandbox_image = Some(environment.config.image.clone());
+            config.sandbox_provider = Some(environment.provider.clone());
+            config.sandbox_image = Some(environment.image.clone());
             config.mounts = mounts;
-            config.durable_file_systems = environment
-                .config
-                .durable_file_systems
-                .clone()
-                .unwrap_or_default();
+            config.durable_file_systems =
+                environment.durable_file_systems.clone().unwrap_or_default();
             config.sandbox_scope = Some(crate::SandboxScope::Conversation);
         }
         if !config.resources.is_empty() {
@@ -196,7 +193,7 @@ impl AgentBackend for LocalProvider {
                     .chain(config.durable_file_systems.iter().map(|m| &m.mount_path))
                 {
                     exoharness::resources::validate_mount_overlap(
-                        &resource.definition.mount_path,
+                        &resource.definition.mount_path(),
                         mount_path,
                     )?;
                 }

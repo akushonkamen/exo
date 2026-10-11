@@ -28,9 +28,7 @@ fn default_true() -> bool {
 pub struct AgentFrontmatter {
     #[serde(default)]
     pub resources: Vec<exoharness::resources::ResourceDefinition>,
-    // Names in saved definitions from before this change are ignored.
-    #[serde(default, rename = "name")]
-    _legacy_name: Option<String>,
+    pub name: Option<String>,
     pub harness: String,
     pub model: AgentModelConfig,
     #[serde(default)]
