@@ -119,6 +119,18 @@ export default defineConfig({
             { text: "Vaults", link: "/architecture/vaults" },
           ],
         },
+        {
+          text: "Adapters",
+          link: "/adapters/",
+          collapsed: false,
+          items: [
+            { text: "Slack", link: "/adapters/slack" },
+            { text: "Discord", link: "/adapters/discord" },
+            { text: "WhatsApp", link: "/adapters/whatsapp" },
+            { text: "Signal", link: "/adapters/signal" },
+            { text: "IRC", link: "/adapters/irc" },
+          ],
+        },
         { text: "Development", link: "/development/" },
       ],
     },

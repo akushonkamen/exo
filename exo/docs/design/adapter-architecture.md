@@ -1,5 +1,8 @@
 # Exo Adapter Architecture
 
+This describes the earlier self-agent implementation. The replacement for managed
+agents is sketched in [Managed adapters](../../../docs/managed-adapters.md).
+
 Exo adapters are host-owned long-running integrations between an Exo
 conversation and an external application. The shared worker shape supports
 agent-cli, Discord, ExoChat, IRC, Signal, Slack, and WhatsApp, and can be

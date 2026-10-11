@@ -145,8 +145,7 @@ their copies. With a remote provider, local paths refer to files on the provider
 ### Adapters
 
 ::: info Planned
-Inline adapter configuration is being implemented. Today deployments are supplied in a separate adapters file and frontmatter
-contains their names.
+This feature is not implemented yet.
 :::
 
 Adapters connect an agent to chat providers like Slack, WhatsApp, and Discord. Configure them in the agent's frontmatter:
@@ -158,18 +157,13 @@ adapters:
     allowed_channels: [C123456]
 ```
 
-Each adapter reads its credentials from the vault named by `vault`, which is required. `name` is optional and defaults to
-the adapter's type; set it to tell apart two adapters of the same type. Use a vault dedicated to the
-adapter and don't attach it to threads, so the agent itself can't use the bot's credentials. A Slack adapter expects
-secrets named `bot-token` and `signing-secret`:
+`name` is optional and defaults to the adapter's type; set it to tell apart two adapters of the same type.
+Slack and Discord require an explicit credential vault. WhatsApp and Signal use linked-device profiles; IRC can connect
+without a credential. Adapter credentials are kept separate from the vaults attached to agent threads.
 
-```bash
-exo vault create support-slack
-exo vault secret create support-slack bot-token --token-env SLACK_BOT_TOKEN
-exo vault secret create support-slack signing-secret --token-env SLACK_SIGNING_SECRET
-```
-
-Adapters run in `--serve` mode.
+Adapters run in `--serve` mode. Each chat conversation maps to a persistent Exo thread, and the agent's response is delivered
+back automatically. Slack supports Socket Mode (the default, with no public endpoint) or HTTP event delivery.
+See [Adapters](adapters/) for configuration and setup instructions for each type.
 
 ## Saved agents
 
@@ -500,10 +494,13 @@ to run your agents; moving existing agents and threads between providers require
   thread and turn IDs in the existing receipt, preserving retry semantics. Accept a plain string `input` as shorthand for a user message, so
   `curl localhost:4766/exo/turn --json '{"input": "..."}'` works. For multi-agent servers, accept agent and thread slugs
   wherever IDs are accepted. Keep the `/exo` base path until a prefix change is decided.
-- [ ] Configure adapters directly in agent frontmatter, resolve their vault credentials, and provision their workers; remove
-  the separate `--adapters-file` configuration. Make `name` optional, defaulting to `type`. Require each adapter's `vault` (no fallback to `global`) and read fixed
-  secret names from it, eg. `bot-token` and `signing-secret` for Slack. Frontmatter currently accepts adapter names, with deployments supplied by
-  the separate file; worker supervision already exists.
+- [ ] Replace the self-agent adapter path with a managed client: configure adapters inline, map chats to persistent threads,
+  submit input through the durable turn queue, and deliver final responses automatically. Remove `--adapters-file` and the
+  model-facing adapter tools. Make `name` optional, defaulting to `type`. Token-based adapters require an explicit vault,
+  without a fallback to `global`; Slack uses `bot-token` plus `app-token` for Socket Mode or `signing-secret` for HTTP.
+  Keep bot credentials and linked-device
+  profiles separate from thread credentials. Implement durable input receipts and reply recovery, beginning with Slack;
+  then port Discord, WhatsApp, Signal, and IRC. See [Adapters](adapters/) for the proposed setup.
 - [ ] Support tool declarations in agent frontmatter and inherit them during execution. `tools` currently accepts module
   paths, and client tool declarations must be supplied as `frontend_tools` on each HTTP turn request.
 - [ ] Move TypeScript tool module registration and path resolution into environments, bind implementations by declared tool
