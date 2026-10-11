@@ -501,6 +501,11 @@ to run your agents; moving existing agents and threads between providers require
 
 ## Planned additions
 
+- [ ] Simplify the HTTP API. When `exo run FILE --serve` serves a single agent, expose agent-less routes:
+  `POST /exo/turn` creates a thread and returns its ID in the receipt, and `/exo/thread/THREAD/...` addresses existing
+  threads. Accept a plain string `input` as shorthand for a user message, so
+  `curl localhost:4766/exo/turn --json '{"input": "..."}'` works. For multi-agent servers, accept agent and thread slugs
+  wherever IDs are accepted, and register `exo run FILE` agents under the file's stem (no path hash).
 - [ ] Flatten environment definitions: expose sandbox settings and network policy fields at the top level, removing the
   `config` and `policy` wrappers from files and the API, including top-level `allowed_tcp_ports`. The parser still requires `EnvironmentDefinition.config`, and
   networking lives under `config.policy`.
