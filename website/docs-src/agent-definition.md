@@ -158,14 +158,23 @@ Adapters connect an agent to chat providers like Slack, WhatsApp, and Discord. C
 
 ```yaml
 adapters:
-  - name: support-slack
-    type: slack
-    bot_token: slack-bot
-    signing_secret: slack-signing
+  - type: slack
+    vault: support-slack
     allowed_channels: [C123456]
 ```
 
-`bot_token` and `signing_secret` are vault references. Adapters run in `--serve` mode.
+Each adapter reads its credentials from the vault named by `vault`, which is required. `name` is optional and defaults to
+the adapter's type; set it to tell apart two adapters of the same type. Use a vault dedicated to the
+adapter and don't attach it to threads, so the agent itself can't use the bot's credentials. A Slack adapter expects
+secrets named `bot-token` and `signing-secret`:
+
+```bash
+exo vault create support-slack
+exo vault secret create support-slack bot-token --token-env SLACK_BOT_TOKEN
+exo vault secret create support-slack signing-secret --token-env SLACK_SIGNING_SECRET
+```
+
+Adapters run in `--serve` mode.
 
 ## Saved agents
 
@@ -496,7 +505,8 @@ to run your agents; moving existing agents and threads between providers require
   `config` and `policy` wrappers from files and the API, including top-level `allowed_tcp_ports`. The parser still requires `EnvironmentDefinition.config`, and
   networking lives under `config.policy`.
 - [ ] Configure adapters directly in agent frontmatter, resolve their vault credentials, and provision their workers; remove
-  the separate `--adapters-file` configuration. Frontmatter currently accepts adapter names, with deployments supplied by
+  the separate `--adapters-file` configuration. Make `name` optional, defaulting to `type`. Require each adapter's `vault` (no fallback to `global`) and read fixed
+  secret names from it, eg. `bot-token` and `signing-secret` for Slack. Frontmatter currently accepts adapter names, with deployments supplied by
   the separate file; worker supervision already exists.
 - [ ] Default a Git resource's omitted `mount_path` to `/workspace/<repo name>`. `ResourceDefinition` still requires an
   explicit mount path.

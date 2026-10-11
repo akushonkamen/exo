@@ -178,12 +178,14 @@
       pre:has(.swap:hover) .swap {
         animation: jiggle 0.5s ease-in-out infinite;
       }
+      /* --tilt is set per value from its width, so long and short values
+         swing their ends the same distance. */
       @keyframes jiggle {
         25% {
-          transform: rotate(-2deg);
+          transform: rotate(calc(var(--tilt, 2deg) * -1));
         }
         75% {
-          transform: rotate(2deg);
+          transform: rotate(var(--tilt, 2deg));
         }
       }
       @media (prefers-reduced-motion: reduce) {
@@ -196,7 +198,7 @@
       }
       .run {
         margin: 40px 0 0;
-        font: 19px var(--mono);
+        font: 19px/1.7 var(--mono);
         color: var(--ink);
       }
       .run .d {
@@ -275,8 +277,8 @@
     </header>
     <main>
       <p class="filename">jq-triage.md</p>
-      <pre><span class="l"><span class="d">---</span></span><span class="l"><span class="k">harness:</span> <span class="swap" data-values="codex claude-code pi">codex</span></span><span class="l"><span class="k">model:</span></span><span class="l">  <span class="k">name:</span> <span class="swap" data-values="gpt-6.1-sol opus-5.5 zai-org/GLM-5.3-Flash">gpt-6.1-sol</span></span><span class="l">  <span class="k">credential:</span> <span class="swap" data-values="openai anthropic baseten">openai</span></span><span class="l"><span class="k">resources:</span></span><span class="l">  - <span class="k">name:</span> jq</span><span class="l">    <span class="k">type:</span> git</span><span class="l">    <span class="k">url:</span> https://github.com/jqlang/jq</span><span class="l"><span class="d">---</span></span><span class="l"> </span><span class="l">Given a bug report against jq, reproduce it</span><span class="l">from source, explain what you found, and</span><span class="l">propose a fix.</span></pre>
-      <p class="run"><span class="d">$ </span>exo run jq-triage.md</p>
+      <pre><span class="l"><span class="d">---</span></span><span class="l"><span class="k">harness:</span> <span class="swap" data-values="codex claude-code pi">codex</span></span><span class="l"><span class="k">model:</span></span><span class="l">  <span class="k">name:</span> <span class="swap" data-values="gpt-6.1-sol opus-5.5 zai-org/GLM-5.3-Flash">gpt-6.1-sol</span></span><span class="l">  <span class="k">credential:</span> <span class="swap" data-values="openai anthropic baseten">openai</span></span><span class="l"><span class="k">resources:</span></span><span class="l">  - <span class="k">name:</span> jq</span><span class="l">    <span class="k">type:</span> git</span><span class="l">    <span class="k">url:</span> https://github.com/jqlang/jq</span><span class="l"><span class="k">adapters:</span></span><span class="l">  - <span class="k">type:</span> slack</span><span class="l">    <span class="k">vault:</span> jq-slack</span><span class="l"><span class="d">---</span></span><span class="l"> </span><span class="l">Given a bug report against jq, reproduce it</span><span class="l">from source, explain what you found, and</span><span class="l">propose a fix.</span></pre>
+      <p class="run"><span class="d">$ </span>exo run jq-triage.md --serve</p>
       <div class="about">
         <p>
           Exo is a minimal, open source runtime for agents. Run the harness of
@@ -291,12 +293,21 @@
     </main>
     <script>
       // Rotates the example between harnesses, fading each value in place.
-      // Clicking a value switches right away; CSS jiggles them on hover.
+      // Clicking a value switches right away. Hovering one pauses the rotation
+      // while CSS jiggles them.
       const swaps = document.querySelectorAll(".swap");
       const still = matchMedia("(prefers-reduced-motion: reduce)").matches;
       let step = 0;
       let fading = false;
       let timer;
+      let hovering = false;
+      // Angle whose arc moves each end of the value about 1.5px.
+      const tilt = (swap) => {
+        const half = swap.getBoundingClientRect().width / 2;
+        // Capped so very short values like "pi" don't visibly tip over.
+        const degrees = Math.min((Math.atan(1.5 / half) * 180) / Math.PI, 4);
+        swap.style.setProperty("--tilt", `${degrees}deg`);
+      };
       const advance = () => {
         if (fading) {
           return;
@@ -312,6 +323,7 @@
               const values = swap.dataset.values.split(" ");
               swap.textContent = values[step % values.length];
               swap.classList.remove("out");
+              tilt(swap);
             }
             fading = false;
           },
@@ -320,11 +332,20 @@
       };
       const schedule = () => {
         clearInterval(timer);
-        if (!still) {
+        if (!still && !hovering) {
           timer = setInterval(advance, 7000);
         }
       };
       for (const swap of swaps) {
+        tilt(swap);
+        swap.addEventListener("mouseenter", () => {
+          hovering = true;
+          schedule();
+        });
+        swap.addEventListener("mouseleave", () => {
+          hovering = false;
+          schedule();
+        });
         swap.addEventListener("click", () => {
           advance();
           schedule();
