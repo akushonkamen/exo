@@ -27,8 +27,8 @@ Then serve the agent:
 exo run support-analyst.md --serve
 ```
 
-Exo maintains the connection while the server is running. Each chat conversation
-maps to a persistent Exo thread, so follow-ups retain its history and filesystem.
+Exo maintains the connection while the server is running. Slack conversations map
+to persistent threads, so participants' follow-ups retain the same history and filesystem.
 Replies are delivered automatically; the agent doesn't need a tool or special
 instructions to send them.
 
@@ -61,16 +61,39 @@ separately.
 
 Bot tokens belong in a dedicated vault selected by the adapter's `vault` field.
 Exo reads that vault to connect the adapter, without attaching it to agent threads.
-The agent's model and other integrations still use the thread's selected vaults.
+Slack turns use `global`. Set `use_sender_vault: true` to also use the submitter's
+associated vault for each turn. The adapter's connection vault stays separate.
 See [Vaults](../architecture/vaults) for those credentials.
 
 WhatsApp and Signal use linked-device profiles instead of bot tokens. Exo keeps
 those profiles in private adapter state on the runtime host, outside the agent's
 sandbox. IRC can connect without a credential when the network permits it.
 
-Incoming chat users do not automatically become Exo users or select their own
-vaults. Adapter threads run with the deployment owner's defaults. Use separate
-agent deployments when conversations need different credentials or access.
+## Identity
+
+Slack users allowed by the adapter can use shared credentials from `global`,
+without having a private vault. Review `global` before enabling an adapter:
+everything usable in it is available to the users you admit.
+
+To enable personal credentials, set `use_sender_vault: true` and associate a private
+vault with the user's email once. Adapters resolve the user through the provider's
+trusted identity sources.
+Optional workspace/user-ID pins give tighter control. Put a shared model key in
+`global` and private integrations in the user's vault. Channel/user restrictions
+control agent access independently of private credential ownership.
+
+One Slack conversation maps to one Exo thread, even when several users participate.
+Credentials are selected per turn; history, artifacts, and files remain shared.
+Data fetched using one person's credentials can therefore be used in later turns.
+Replies in a channel remain visible to that channel's participants. Other transports also need verified sender
+identity before they can use private vaults.
+
+## Hosted providers
+
+Hosted Braintrust and Cloudflare providers require Slack's `transport: http` and
+supply the webhook URL. Create the agent and its adapter vault on that provider;
+local vaults are not uploaded with the definition. See
+[Slack hosting](slack#hosted-providers) for the URL and credential commands.
 
 ## Running the server
 

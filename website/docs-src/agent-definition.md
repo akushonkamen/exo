@@ -161,8 +161,12 @@ adapters:
 Slack and Discord require an explicit credential vault. WhatsApp and Signal use linked-device profiles; IRC can connect
 without a credential. Adapter credentials are kept separate from the vaults attached to agent threads.
 
-Adapters run in `--serve` mode. Each chat conversation maps to a persistent Exo thread, and the agent's response is delivered
+Local adapters run in `--serve` mode; hosted providers manage them on the server. Each chat conversation maps to a persistent Exo thread, and the agent's response is delivered
 back automatically. Slack supports Socket Mode (the default, with no public endpoint) or HTTP event delivery.
+Braintrust and Cloudflare providers require HTTP. Allowed Slack users can use shared credentials from `global`;
+shared identity/vault ownership adds private credentials across adapters, with optional workspace/user-ID pins.
+Set `use_sender_vault: true` to use the submitter's associated vault for each Slack turn; it defaults to `false`, using
+only `global`. History and files stay shared within the conversation, including data fetched using personal credentials.
 See [Adapters](adapters/) for configuration and setup instructions for each type.
 
 ## Saved agents
@@ -486,8 +490,6 @@ to run your agents; moving existing agents and threads between providers require
 
 ## Planned additions
 
-<!-- Keep this checklist aligned with the implementation backlog in /TODO.md. -->
-
 - [ ] Simplify the HTTP API. When `exo run FILE --serve` serves a single agent, expose agent-less routes:
   `POST /exo/turn` creates a thread and submits its first input, and `/exo/thread/THREAD/...` addresses existing
   threads. Add `POST /exo/agent/AGENT/turn` for the same new-thread flow on multi-agent or hosted servers. Return
@@ -501,6 +503,15 @@ to run your agents; moving existing agents and threads between providers require
   Keep bot credentials and linked-device
   profiles separate from thread credentials. Implement durable input receipts and reply recovery, beginning with Slack;
   then port Discord, WhatsApp, Signal, and IRC. See [Adapters](adapters/) for the proposed setup.
+- [ ] Allow Slack users admitted by adapter policy to run with shared `global` credentials. Associate private vaults
+  with shared identities by email, resolve users through trusted identity sources, and support optional stricter
+  workspace/user-ID pins. Keep these associations provider-wide. Add `use_sender_vault` (default `false`): when enabled,
+  each turn uses `global` plus the submitter's associated vault, while the Slack conversation keeps one shared Exo thread.
+  Replace credential bindings and authenticated clients between turns, without accumulating private vaults on the thread.
+  Reauthorize queued input and approval actions after identity/ownership changes or revocation. Add `allowed_users`, reject Slack Connect
+  by default, and require HTTP on the Braintrust and
+  Cloudflare providers. Publish only the local webhook path when API authentication is disabled. Support HTTP manifest
+  provisioning before bot credentials are imported, and send a receipt reaction before the final answer.
 - [ ] Support tool declarations in agent frontmatter and inherit them during execution. `tools` currently accepts module
   paths, and client tool declarations must be supplied as `frontend_tools` on each HTTP turn request.
 - [ ] Move TypeScript tool module registration and path resolution into environments, bind implementations by declared tool

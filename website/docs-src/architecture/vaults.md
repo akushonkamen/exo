@@ -10,6 +10,7 @@ has a name and a policy describing where it can be used.
 
 Every thread inherits `global`. On an authenticated server, this is one server-wide shared vault; its owner controls writes.
 Threads also inherit the signed-in user's `personal` vault, and you can explicitly attach other vaults to a thread.
+Secrets in `global` are shared with all admitted users; keep private integration credentials in a user's vault.
 When multiple vaults contain a matching credential, personal credentials take precedence over `global`, and explicitly
 attached vaults take precedence over both. Later attachments take precedence over earlier ones.
 
@@ -93,6 +94,26 @@ can still come from `global`.
 
 Vaults stay attached when you resume a thread. You can repeat `--vault` to attach multiple vaults, or add another vault when
 resuming with `--thread THREAD`.
+
+### Shared identities
+
+::: info Planned
+This feature is not implemented yet.
+:::
+
+Allowed Slack users can run with shared credentials from `global`, without needing
+a private vault. Assign a private vault to a shared identity once, using its email:
+
+```bash
+exo vault bind alice --email alice@example.com
+```
+
+Adapters resolve users through trusted identity sources and use that same vault
+alongside `global` when `use_sender_vault: true` is enabled. Optional external
+workspace/user-ID pins can restrict resolution more tightly. Vault access is scoped
+to the submitting user's turn; the conversation's history and filesystem remain
+shared, including data fetched with personal credentials.
+See [Slack private credentials](../adapters/slack#private-credentials).
 
 ## Destination policies
 
