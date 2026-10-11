@@ -50,6 +50,10 @@ export class Runtime {
     private readonly waitUntil: (promise: Promise<unknown>) => void,
     private readonly emitRuntimeEvent: (event: RawRuntimeEvent) => void,
     thread = false,
+    private readonly discard: (
+      request: HostRequest,
+      result: unknown,
+    ) => Promise<void>,
   ) {
     this.wasm = new WorkerRuntime(masterKey, thread);
   }
@@ -131,7 +135,13 @@ export class Runtime {
           message = error instanceof Error ? error.message : String(error);
         }
         this.calls.delete(call.id);
-        this.wasm.resolve(call.id, result, message);
+        if (!this.wasm.resolve(call.id, result, message)) {
+          try {
+            await this.discard(call.request, result);
+          } catch (error) {
+            console.error("Abandoned host call cleanup failed", error);
+          }
+        }
         this.pump();
       };
       this.waitUntil(respond());

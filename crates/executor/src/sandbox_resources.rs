@@ -3,7 +3,7 @@ use crate::{AgentConfig, ConversationConfig};
 use anyhow::{Result, ensure};
 use exoharness::resources::{PreparedResource, ResourceSource};
 use exoharness::{ConversationHandle, RunInSandboxRequest};
-use futures::io::{AsyncBufReadExt, AsyncReadExt, BufReader};
+use futures::io::{AsyncBufReadExt, BufReader};
 
 pub(crate) async fn materialize(
     thread: &dyn ConversationHandle,
@@ -34,10 +34,10 @@ pub(crate) async fn materialize(
             .await?;
         let mut parts = process.into_parts();
         futures::io::AsyncWriteExt::close(&mut parts.stdin).await?;
-        let mut stdout = Vec::new();
+        let mut stdout = futures::io::sink();
         let mut stderr = Vec::new();
         let (out, err, exit) = futures::join!(
-            parts.stdout.read_to_end(&mut stdout),
+            futures::io::copy(&mut parts.stdout, &mut stdout),
             async {
                 let mut reader = BufReader::new(parts.stderr);
                 let mut record = Vec::new();

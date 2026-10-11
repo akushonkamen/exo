@@ -106,8 +106,12 @@ export class FakeSandbox extends DurableObject {
     app.process.writeStdin = async line => {const request = JSON.parse(line); if (request.method === "turn/start") holdTurn = JSON.stringify(request.params).includes("hold-turn"); if (["thread/start", "thread/resume"].includes(request.method)) { await this.ctx.storage.put("last-method", request.method); await this.ctx.storage.put("mcp-config", request.params.config.mcp_servers); } await write(line);};
     return new FakeProcess(app.process, line => holdTurn && JSON.parse(line).method === "turn/completed");
   }
+  blockNextStart() { this.blockStart = true; this.blocked = new Promise(resolve => this.notifyBlocked = resolve); }
+  waitForBlockedStart() { return this.blocked; }
+  releaseBlockedStart() { this.releaseStart(); }
   async runProcess(identity, request, ready) {
     const process = await this.startProcess(request); this.processes.add(process);
+    if (this.blockStart && request.command.join(" ").includes("codex")) { this.blockStart = false; await new Promise(resolve => { this.releaseStart = resolve; this.notifyBlocked(); }); }
     const capability = new RpcStub(process);
     try { await ready(capability); await process.wait(); }
     finally { capability[Symbol.dispose](); this.processes.delete(process); }
@@ -126,14 +130,16 @@ async function options({ accessAud, access, staticToken = token } = {}) {
   const modules = {
     "index.js": {
       type: "esm",
-      contents: `import { ExoProvider as Provider, ExoThread as Thread } from "./implementation.js";
+      contents: `import { ExoProvider as Provider, ExoThread as Thread, proxyEgress } from "./implementation.js";
 export class ExoProvider extends Provider {
-  // Capture the Rust error before crossing Miniflare's RPC bridge.
-  async proxyForTest(identity, request) { try { const response = await this.proxy(identity, request); return {status: response.status, body: await response.text()}; } catch (error) { return {error: error.message}; } }
+  failNextSubscriptionForTest() { this.failNextSubscription = true; }
+  subscribe(...args) { if (this.failNextSubscription) { this.failNextSubscription = false; throw new Error("transient subscription failure"); } return super.subscribe(...args); }
+  async proxyForTest(identity, request) { try { const response = await proxyEgress(identity, request, this); return {status: response.status, body: await response.text()}; } catch (error) { return {error: error.message}; } }
 }
 export class ExoThread extends Thread {
   async harnessRequestForTest(thread_id, request) { try { return await this.runtime.call({type: "harness_request", thread_id, request}); } catch (error) { return {error: error.message}; } }
   alarmForTest() { return this.ctx.storage.getAlarm(); }
+  recoverForTest() { return this.alarm(); }
 }
 export {default, ExoSandbox, ExoEgress} from "./implementation.js";`,
     },
@@ -270,6 +276,11 @@ export {default, ExoSandbox, ExoEgress} from "./implementation.js";`,
                 }
                 return Response.json({ jsonrpc: "2.0", id: body.id, result });
               }
+              if (
+                request.headers.get("authorization") ===
+                "Bearer revoked-egress-token"
+              )
+                return new Response(null, { status: 401 });
               if (
                 new URL(request.url).hostname !== "model.example" ||
                 new URL(request.url).pathname === "/echo"
@@ -1036,46 +1047,64 @@ test("Codex reuses its RPC process across turns and resumes after backend shutdo
   await sandbox.stop();
 });
 
-test("Codex cancellation uses the shared turn lifecycle and stops its managed process", async () => {
-  const { agent, thread, path } = await create(false, "codex");
-  const submitted = await sendTurn(path, "hold-turn");
-  const events = await waitEvents(path, (events) =>
-    events.some((event) => event.data.event_type === "codex_turn_started"),
-  );
-  assert(!events.some((event) => event.data.type === "turn_ended"));
-  const sandbox = await sandboxFor(agent, thread);
-  assert.equal(await sandbox.activityCount(), 1);
-  const process = events.find(
-    (event) =>
-      event.data.type === "sandbox_process_started" &&
-      event.data.command.some((arg) => arg.includes("app-server")),
-  ).data;
-  assert.equal(
-    (await api(`${path}/turn/${submitted.turn.id}/cancel`, "POST", {}))
-      .canceled_active_turn,
-    true,
-  );
-  await waitTurn(path);
-  await assertTurnInactive(agent, thread);
-  assert.equal(await sandbox.activityCount(), 0);
-  const result = await rpc({
-    type: "get_sandbox_process_events",
-    scope: {
-      type: "thread",
-      agent_id: agent.id,
-      thread_id: thread.id,
-    },
-    query: {
-      sandbox_id: process.sandbox_id,
-      process_id: process.process_id,
-      after: null,
-      limit: 0,
-      follow: false,
-    },
-  });
-  assert.notEqual(result.result.status.type, "running");
-  assert.equal(await (await sandboxFor(agent, thread)).processCount(), 0);
-});
+test(
+  "Codex cancellation uses the shared turn lifecycle and stops its managed process",
+  { timeout: 10000 },
+  async () => {
+    const { agent, thread, path } = await create(false, "codex");
+    const submitted = await sendTurn(path, "hold-turn");
+    const events = await waitEvents(path, (events) =>
+      events.some((event) => event.data.event_type === "codex_turn_started"),
+    );
+    assert(!events.some((event) => event.data.type === "turn_ended"));
+    const sandbox = await sandboxFor(agent, thread);
+    assert.equal(await sandbox.activityCount(), 1);
+    const process = events.find(
+      (event) =>
+        event.data.type === "sandbox_process_started" &&
+        event.data.command.some((arg) => arg.includes("app-server")),
+    ).data;
+    assert.equal(
+      (await api(`${path}/turn/${submitted.turn.id}/cancel`, "POST", {}))
+        .canceled_active_turn,
+      true,
+    );
+    await waitTurn(path);
+    await assertTurnInactive(agent, thread);
+    assert.equal(await sandbox.activityCount(), 0);
+    const result = await rpc({
+      type: "get_sandbox_process_events",
+      scope: {
+        type: "thread",
+        agent_id: agent.id,
+        thread_id: thread.id,
+      },
+      query: {
+        sandbox_id: process.sandbox_id,
+        process_id: process.process_id,
+        after: null,
+        limit: 0,
+        follow: false,
+      },
+    });
+    assert.notEqual(result.result.status.type, "running");
+    assert.equal(await (await sandboxFor(agent, thread)).processCount(), 0);
+    // Cancel while the backend has created a process but has not returned its handle.
+    await sandbox.blockNextStart();
+    const starting = await sendTurn(path, "hold-turn");
+    await sandbox.waitForBlockedStart();
+    await api(`${path}/turn/${starting.turn.id}/cancel`, "POST", {});
+    await sandbox.releaseBlockedStart();
+    await waitTurn(path, starting.turn.id);
+    for (let i = 0; i < 150 && (await sandbox.processCount()); i++)
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    assert.equal(
+      await sandbox.processCount(),
+      0,
+      "an abandoned start must close its returned process",
+    );
+  },
+);
 
 async function rpc(request) {
   const response = await api("request", "POST", {
@@ -1237,7 +1266,7 @@ test("Worker egress substitutes credentials and enforces destination policies", 
   const proxy = (identity, url, headers) =>
     provider.proxyForTest(identity, new Request(url, { headers }));
   const denied = async (identity, url, message, headers) =>
-    assert.match((await proxy(identity, url, headers)).error, message, url);
+    assert.equal((await proxy(identity, url, headers)).status, 403, url);
   for (const [url, message] of [
     ["https://other.example/", /credential placeholder does not match/],
     ["http://model.example/echo", /credential substitution requires HTTPS/],
@@ -1302,6 +1331,63 @@ test("Worker egress substitutes credentials and enforces destination policies", 
       );
     await rpc({ type: "stop_sandbox", scope, sandbox_id });
   }
+  await denied(identity, "https://model.example/echo", /upgrade/, {
+    upgrade: "websocket",
+  });
+  assert.equal(
+    (await proxy(identity, "https://model.example/echo", { "x-latin": "café" }))
+      .status,
+    302,
+  );
+  const vault = (await api("vault")).find((vault) => vault.name === "global");
+  await api(`vault/${vault.id}/secret`, "POST", {
+    name: "egress-oauth",
+    policy: policy("https://model.example"),
+    secret: {
+      type: "oauth",
+      access_token: "revoked-egress-token",
+      refresh_token: "test-refresh",
+      expires_at: 4000000000,
+      refresh: {
+        token_endpoint: "https://auth.example/token",
+        client_id: "test-client",
+        scopes: [],
+        resource: null,
+      },
+    },
+  });
+  const scope = { type: "thread", agent_id: agent.id, thread_id: thread.id };
+  const { sandbox_id } = await rpc({
+    type: "create_sandbox",
+    scope,
+    request: {
+      provider: "cloudflare",
+      image: "",
+      idle_seconds: 60,
+      policy: {
+        networking: { type: "unrestricted" },
+        credentials: [
+          {
+            name: "egress-oauth",
+            environment_variable: "OAUTH",
+            ...policy("https://model.example"),
+          },
+        ],
+      },
+    },
+  });
+  const { SANDBOXES } = await mf.getBindings("exo");
+  const { OAUTH } = await SANDBOXES.getByName(sandbox_id).environment();
+  const refreshes = oauthRefreshes;
+  const refreshed = await proxy(
+    { ...identity, sandboxId: sandbox_id },
+    "https://model.example/echo",
+    { authorization: `Bearer ${OAUTH}` },
+  );
+  assert.equal(refreshed.status, 302);
+  assert.equal(JSON.parse(refreshed.body).header, "Bearer synthetic-mcp-key");
+  assert.equal(oauthRefreshes, refreshes + 1);
+  await rpc({ type: "stop_sandbox", scope, sandbox_id });
   await sandbox.stop();
 });
 
@@ -1449,4 +1535,33 @@ test("Codex receives MCP configuration and Git resources through shared sandbox 
         event.data.message.includes("No space left on device"),
     ),
   );
+});
+
+test("a thread alarm retries a queue drain after a transient host failure", async () => {
+  const { agent, thread, path } = await create();
+  const { PROVIDERS, THREADS } = await mf.getBindings("exo");
+  await PROVIDERS.getByName("test-account").failNextSubscriptionForTest();
+  const submitted = await sendTurn(path);
+  const owner = THREADS.getByName(
+    JSON.stringify(["test-account", agent.id, thread.id]),
+  );
+  for (let i = 0; i < 150; i++) {
+    await owner.recoverForTest();
+    const { events } = await api(`${path}/event?limit=1000`);
+    if (
+      events.some(
+        (event) =>
+          event.turn_id === submitted.turn.id &&
+          event.data.type === "turn_ended",
+      )
+    ) {
+      assert(
+        !events.some((event) => event.data.type === "error"),
+        JSON.stringify(events),
+      );
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  assert.fail("alarm did not retry the retained turn");
 });

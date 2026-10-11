@@ -912,6 +912,7 @@ impl TuiApp {
         match event {
             ExecutionStreamEvent::Status { message } => self.runtime_status = Some(message),
             ExecutionStreamEvent::ApprovalRequested { turn, approval } => {
+                self.runtime_status = None;
                 self.push_notice(&format!(
                     "Permission required: {} {}",
                     approval.request.function_name,
@@ -919,8 +920,9 @@ impl TuiApp {
                 ));
                 self.approvals.push_back((turn, approval));
             }
-            ExecutionStreamEvent::FirstChunk { .. } => {}
+            ExecutionStreamEvent::FirstChunk { .. } => self.runtime_status = None,
             ExecutionStreamEvent::Chunk(chunk) => {
+                self.runtime_status = None;
                 let text = chunk_text(&chunk);
                 if !text.is_empty() {
                     self.append_assistant_text(&text);
@@ -931,6 +933,7 @@ impl TuiApp {
                 tool_name,
                 arguments,
             } => {
+                self.runtime_status = None;
                 self.open_assistant = None;
                 self.assistant_prefixed = false;
                 if let Some(rendered) = render_tool_call(&tool_name, &arguments, self.verbosity) {

@@ -57,6 +57,15 @@ pub(crate) struct HostCall {
     pub request: HostRequest,
 }
 
+#[derive(Debug)]
+pub(crate) struct HostError(String);
+impl std::fmt::Display for HostError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+impl std::error::Error for HostError {}
+
 type HostReply = Result<JsValue, String>;
 
 #[derive(Default)]
@@ -86,7 +95,7 @@ impl Host {
         let reply = receiver
             .await
             .context("Worker host stopped before replying")?;
-        let result = reply.map_err(anyhow::Error::msg)?;
+        let result = reply.map_err(HostError)?;
         serde_wasm_bindgen::from_value(result).context("decoding Worker host response")
     }
 

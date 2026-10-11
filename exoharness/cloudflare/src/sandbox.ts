@@ -34,9 +34,6 @@ export class CloudflareProcess extends RpcTarget {
   get stderr(): ReadableStream<Uint8Array> {
     return this.stderrPipe;
   }
-  get sandboxProcessId(): string {
-    return String(this.process.pid);
-  }
   async writeStdin(data: Uint8Array): Promise<void> {
     await this.writer.write(data);
   }
@@ -99,10 +96,9 @@ export class CloudflareSandbox {
     });
     const process = await ready;
     try {
-      const [stdout, stderr, sandboxProcessId] = await Promise.all([
+      const [stdout, stderr] = await Promise.all([
         process.stdout,
         process.stderr,
-        process.sandboxProcessId,
       ]);
       let waiting: Promise<number> | undefined;
       let disposed = false;
@@ -113,9 +109,6 @@ export class CloudflareSandbox {
         }
       };
       return {
-        sandboxId: this.identity.sandboxId,
-        sandboxProcessId,
-        reused: false,
         stdout,
         stderr,
         writeStdin: (data: Uint8Array) => process.writeStdin(data),
@@ -223,7 +216,7 @@ export class ExoSandbox extends DurableObject<Env> {
 
   async terminate(identity: SandboxIdentity): Promise<void> {
     await this.info(identity);
-    await this.stop();
+    await this.stop(false);
     await this.ctx.storage.deleteAll();
   }
 
@@ -231,7 +224,13 @@ export class ExoSandbox extends DurableObject<Env> {
     this.activities.add(id);
     // A checkpoint may take longer than blockConcurrencyWhile's time limit.
     // New work waits for that checkpoint before restarting the sandbox.
-    await (await this.readyContainer(identity)).setInactivityTimeout(660_000);
+    try {
+      await this.readyContainer(identity);
+    } catch (error) {
+      this.activities.delete(id);
+      await this.scheduleIdle();
+      throw error;
+    }
   }
 
   async endActivity(id: string): Promise<void> {
@@ -240,7 +239,12 @@ export class ExoSandbox extends DurableObject<Env> {
   }
 
   private async scheduleIdle(): Promise<void> {
-    if (!this.ctx.container?.running) return;
+    if (
+      this.activities.size > 0 ||
+      this.activeExecs > 0 ||
+      !this.ctx.container?.running
+    )
+      return;
     await this.ctx.storage.setAlarm(Date.now() + this.idleMs);
     // The alarm checkpoints before the platform's inactivity shutdown.
     // Active turns postpone the alarm; the Rust runtime owns cancellation.
@@ -436,23 +440,29 @@ export class ExoSandbox extends DurableObject<Env> {
     }
   }
 
-  async stop(): Promise<void> {
+  async stop(checkpoint = true): Promise<void> {
     this.activities.clear();
-    this.stopping ??= this.checkpointAndStop().finally(() => {
+    this.stopping ??= this.checkpointAndStop(checkpoint).finally(() => {
       this.stopping = undefined;
     });
     await this.stopping;
   }
 
-  private async checkpointAndStop(): Promise<void> {
+  private async checkpointAndStop(checkpoint: boolean): Promise<void> {
     await this.ctx.storage.deleteAlarm();
     const container = this.ctx.container;
     if (!container?.running) return;
-    // End process sessions before checkpointing so applications can flush
-    // their state. Turns do not wait for either operation.
-    await Promise.all([...this.processes].map((process) => process.close()));
-    const snapshot = await container.snapshotContainer();
-    await this.ctx.storage.put("snapshot", snapshot);
-    await container.destroy();
+    try {
+      // End process sessions before checkpointing so applications can flush.
+      await Promise.all([...this.processes].map((process) => process.close()));
+      if (checkpoint) {
+        const snapshot = await container.snapshotContainer();
+        await this.ctx.storage.put("snapshot", snapshot);
+      }
+      await container.destroy();
+    } catch (error) {
+      await this.scheduleIdle();
+      throw error;
+    }
   }
 }

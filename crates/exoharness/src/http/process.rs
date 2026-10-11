@@ -36,6 +36,8 @@ pub(super) fn open(
         sandbox_id: sandbox_id.clone(),
         process_id: process_id.clone(),
         finished: false,
+        #[cfg(feature = "basic-backend")]
+        runtime: tokio::runtime::Handle::try_current().ok(),
     };
     let (stdout_tx, stdout_rx) = mpsc::channel(8);
     let (stderr_tx, stderr_rx) = mpsc::channel(8);
@@ -98,9 +100,10 @@ pub(super) fn open(
             let mut guard = guard;
             let result = wait_rx
                 .await
-                .map_err(|_| anyhow!("HTTP sandbox process poller stopped"))??;
+                .map_err(|_| anyhow!("HTTP sandbox process poller stopped"))?;
+            // Losing the observer to a transport error does not stop the process.
             guard.finished = true;
-            Ok(result)
+            result
         }),
     }))
 }
@@ -127,6 +130,8 @@ async fn poll_events(
             },
         )
         .await?;
+        #[cfg(feature = "basic-backend")]
+        let empty = result.events.is_empty();
         for event in result.events {
             cursor = Some(event.cursor());
             match event {
@@ -140,7 +145,13 @@ async fn poll_events(
             }
         }
         match result.status {
-            SandboxProcessStatus::Running => {}
+            SandboxProcessStatus::Running => {
+                // An HTTP transport may return an empty page without long-polling.
+                #[cfg(feature = "basic-backend")]
+                if empty {
+                    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                }
+            }
             SandboxProcessStatus::Exited { exit_code } => return Ok(exit_code),
             SandboxProcessStatus::Failed { message } => return Err(anyhow!(message)),
             SandboxProcessStatus::Cancelled => {
@@ -184,6 +195,8 @@ struct CancelProcess {
     sandbox_id: SandboxId,
     process_id: SandboxProcessId,
     finished: bool,
+    #[cfg(feature = "basic-backend")]
+    runtime: Option<tokio::runtime::Handle>,
 }
 impl Drop for CancelProcess {
     fn drop(&mut self) {
@@ -197,12 +210,19 @@ impl Drop for CancelProcess {
             process_id: self.process_id.clone(),
             signal: None,
         };
-        self.host.spawn(Box::pin(async move {
+        let task = Box::pin(async move {
             if let Err(error) =
                 super::client::http_cancel_sandbox_process(&harness, scope, request).await
             {
                 tracing::warn!(%error, "failed to cancel abandoned HTTP sandbox process");
             }
-        }));
+        });
+        #[cfg(feature = "basic-backend")]
+        if let Some(runtime) = &self.runtime {
+            let _entered = runtime.enter();
+            self.host.spawn(task);
+            return;
+        }
+        self.host.spawn(task);
     }
 }

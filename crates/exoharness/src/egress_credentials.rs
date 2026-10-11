@@ -300,7 +300,19 @@ impl CredentialBindings {
         identity: &EgressIdentity,
         resolver: &dyn EgressCredentialResolver,
     ) -> Result<()> {
-        substitute_credentials(&self.bindings, headers, destination, identity, resolver).await?;
+        self.substitute_tracked(headers, destination, identity, resolver)
+            .await?;
         Ok(())
+    }
+
+    /// The substituted values let the proxy refresh only credentials rejected by the upstream.
+    pub async fn substitute_tracked(
+        &self,
+        headers: &mut HeaderMap,
+        destination: &EgressDestination,
+        identity: &EgressIdentity,
+        resolver: &dyn EgressCredentialResolver,
+    ) -> Result<Vec<(String, String)>> {
+        substitute_credentials(&self.bindings, headers, destination, identity, resolver).await
     }
 }

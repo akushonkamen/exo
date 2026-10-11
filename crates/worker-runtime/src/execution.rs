@@ -117,6 +117,7 @@ pub(crate) struct WorkerExecutor {
     pub mcp: Arc<crate::mcp::WorkerMcp>,
     pub state: Arc<dyn exoharness::ExoHarness>,
     pub sandbox_default: SandboxProvider,
+    pub thread: bool,
     pub harnesses: Mutex<HashMap<exoharness::ThreadId, Arc<tokio::sync::OnceCell<WorkerHarness>>>>,
 }
 
@@ -161,11 +162,16 @@ impl Drop for ActiveTurn<'_> {
 #[async_trait]
 impl HarnessExecutor for WorkerExecutor {
     async fn reset_thread(&self, thread: exoharness::ThreadId) -> Result<()> {
-        let cell = self
-            .harnesses
-            .lock()
-            .expect("Worker harnesses poisoned")
-            .remove(&thread);
+        let cell = {
+            let mut harnesses = self.harnesses.lock().expect("Worker harnesses poisoned");
+            if let Some(cell) = harnesses.get(&thread) {
+                ensure!(
+                    Arc::strong_count(cell) == 1,
+                    "thread is busy; wait for its current turn or setup to finish before reconfiguring it"
+                );
+            }
+            harnesses.remove(&thread)
+        };
         if let Some(cell) = cell
             && let Some(harness) = cell.get()
         {
@@ -212,14 +218,28 @@ impl HarnessExecutor for WorkerExecutor {
         config: &AgentConfig,
         thread_config: &ConversationConfig,
     ) -> Result<usize> {
-        let cell = self.harness(agent, thread, config, thread_config).await?;
-        Ok(cell
-            .get()
-            .expect("Worker harness initialized")
-            .mcp
-            .tools
-            .tools()
-            .len())
+        let result = async {
+            let cell = self.harness(agent, thread, config, thread_config).await?;
+            Ok::<_, anyhow::Error>(
+                cell.get()
+                    .expect("Worker harness initialized")
+                    .mcp
+                    .tools
+                    .tools()
+                    .len(),
+            )
+        }
+        .await;
+        if !self.thread {
+            let closed = self.reset_thread(thread.record().id).await;
+            if let Err(error) = closed {
+                return Err(match result {
+                    Err(primary) => primary.context(format!("MCP setup cleanup failed: {error:#}")),
+                    Ok(_) => error,
+                });
+            }
+        }
+        result
     }
 
     async fn prepare_conversation(
@@ -499,10 +519,12 @@ impl WorkerExecutor {
         let active_turn = ActiveTurn(harness);
         let result = self.host.call::<()>(HostRequest::Harness { payload }).await;
         drop(active_turn);
-        if result.is_err() {
-            harness.runtime.shutdown().await?;
+        if let Err(error) = result {
+            return Err(match harness.runtime.shutdown().await {
+                Ok(()) => error,
+                Err(cleanup) => error.context(format!("harness cleanup failed: {cleanup:#}")),
+            });
         }
-        result?;
         Ok(())
     }
 }

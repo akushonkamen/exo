@@ -32,7 +32,6 @@ export interface SandboxRequest {
   };
   lifecycle: { idle_ttl: { secs: number; nanos: number } | null };
 }
-export type SandboxPolicy = Record<string, string>;
 export interface ExecRequest {
   command: string[];
   env?: Record<string, string>;

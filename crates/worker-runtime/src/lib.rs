@@ -46,6 +46,7 @@ struct Progress {
 #[wasm_bindgen]
 pub struct WorkerRuntime {
     runtime: Runtime,
+    provider: LocalProvider,
     execution: Arc<WorkerExecutor>,
     mutations: Arc<tokio::sync::Mutex<()>>,
     host: Arc<Host>,
@@ -113,14 +114,17 @@ impl WorkerRuntime {
             harnesses: Mutex::default(),
             mcp: Arc::new(mcp::WorkerMcp::new(host.clone())),
             coordinator: coordinator.clone(),
+            thread,
         });
+        let provider = LocalProvider::with_host(state, execution.clone(), host.clone())
+            .with_turn_coordinator(coordinator);
         let runtime = Runtime::with_tracer(
-            LocalProvider::with_host(state, execution.clone(), host.clone())
-                .with_turn_coordinator(coordinator),
+            provider.clone(),
             Arc::new(executor::execution_tracing::NoopExecutionTracer),
         );
         Ok(Self {
             runtime,
+            provider,
             execution,
             mutations: Arc::default(),
             host,
@@ -141,6 +145,7 @@ impl WorkerRuntime {
             .checked_add(1)
             .ok_or_else(|| JsValue::from_str("Worker operation id overflow"))?;
         let runtime = self.runtime.clone();
+        let provider = self.provider.clone();
         let host = self.host.clone();
         let execution = self.execution.clone();
         let updates = self.mutations.clone();
@@ -150,7 +155,9 @@ impl WorkerRuntime {
         self.cancellations.insert(id, cancel);
         self.running.push(Box::pin(async move {
             let result = Abortable::new(
-                operations::run(runtime, execution, host, updates, progress, id, operation),
+                operations::run(
+                    runtime, provider, execution, host, updates, progress, id, operation,
+                ),
                 registration,
             )
             .await

@@ -20,7 +20,6 @@ exoharness = { path = "../exoharness", features = ["store"] }
 futures.workspace = true
 http = "1"
 oauth2.workspace = true
-lingua.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 serde-wasm-bindgen = "0.6.5"

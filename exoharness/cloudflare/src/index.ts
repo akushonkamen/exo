@@ -3,7 +3,7 @@ import { requestPath, staticAuthorization } from "./provider";
 import { threadObjectName } from "./runtime";
 export { ExoProvider, ExoThread } from "./provider";
 export { ExoSandbox } from "./sandbox";
-export { ExoEgress } from "./network";
+export { ExoEgress, proxyEgress } from "./network";
 
 declare global {
   namespace Cloudflare {
@@ -38,15 +38,22 @@ export default {
         path[0] === "agent" &&
         path[2] === "thread" &&
         (path[4] === "turn" || (path[4] === "event" && path[5] === "watch"))
-      )
-        return env.THREADS.getByName(
-          threadObjectName(env.ACCOUNT_ID, path[1], path[3]),
-        ).handleRequest(request);
-      return env.PROVIDERS.getByName(env.ACCOUNT_ID).handleRequest(request);
+      ) {
+        let name: string;
+        try {
+          name = threadObjectName(env.ACCOUNT_ID, path[1], path[3]);
+        } catch (error) {
+          return Response.json({ error: String(error) }, { status: 400 });
+        }
+        return await env.THREADS.getByName(name).handleRequest(request);
+      }
+      return await env.PROVIDERS.getByName(env.ACCOUNT_ID).handleRequest(
+        request,
+      );
     } catch (error) {
       return Response.json(
         { error: error instanceof Error ? error.message : String(error) },
-        { status: 400 },
+        { status: error instanceof URIError ? 400 : 500 },
       );
     }
   },

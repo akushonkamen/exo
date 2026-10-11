@@ -2847,7 +2847,6 @@ dependencies = [
  "exoharness",
  "futures",
  "http 1.4.0",
- "lingua",
  "oauth2",
  "serde",
  "serde-wasm-bindgen",

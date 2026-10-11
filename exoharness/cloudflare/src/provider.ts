@@ -1,21 +1,12 @@
 import { DurableObject, RpcTarget } from "cloudflare:workers";
-import type {
-  RawExoRequest,
-  RawExoResponse,
-  RawEvent,
-} from "../../typescript/harness/client";
-import type {
-  Env,
-  SandboxIdentity,
-  SandboxPolicy,
-  SandboxRequest,
-} from "./env";
+import type { RawEvent } from "../../typescript/harness/client";
+import type { Env, SandboxIdentity } from "./env";
 import { Runtime } from "./runtime";
 import { RuntimeIO } from "./runtime-io";
 
 class RuntimeObject extends DurableObject<Env> {
   protected readonly runtime: Runtime;
-  private readonly recovered: Promise<unknown>;
+  protected recovered?: Promise<unknown>;
 
   constructor(ctx: DurableObjectState, env: Env, thread = false) {
     super(ctx, env);
@@ -26,23 +17,33 @@ class RuntimeObject extends DurableObject<Env> {
       (promise) => ctx.waitUntil(promise),
       (event) => io.harnessProcesses.handleEvent(event),
       thread,
+      (request, result) => io.discard(request, result),
     );
     io = new RuntimeIO(ctx, env, this.runtime);
-    this.recovered = thread
-      ? this.runtime.call({ type: "recover" })
-      : Promise.resolve();
-    ctx.waitUntil(this.recovered);
+    if (!thread) this.recovered = Promise.resolve();
+    else
+      ctx.waitUntil(
+        this.recover().catch((error) =>
+          console.error("Turn recovery failed", error),
+        ),
+      );
   }
 
-  async sandboxPolicy(request: SandboxRequest): Promise<SandboxPolicy> {
+  protected recover(): Promise<unknown> {
+    return (this.recovered ??= this.runtime
+      .call({ type: "drain_queue" })
+      .catch((error) => {
+        this.recovered = undefined;
+        throw error;
+      }));
+  }
+
+  async proxyHeaders(
+    identity: SandboxIdentity,
+    request: Request,
+    rejected: [string, string][] | null = null,
+  ): Promise<import("./network").ProxyReply> {
     return this.runtime.call({
-      type: "sandbox_policy",
-      request,
-    });
-  }
-
-  async proxy(identity: SandboxIdentity, request: Request): Promise<Response> {
-    const headers = await this.runtime.call<[string, string][]>({
       type: "proxy_headers",
       agent_id: identity.agentId,
       thread_id: identity.threadId,
@@ -50,28 +51,19 @@ class RuntimeObject extends DurableObject<Env> {
       url: request.url,
       method: request.method,
       headers: [...request.headers],
+      rejected,
     });
-    // Redirects return to the sandbox so every destination is checked again.
-    return fetch(
-      new Request(request.url, {
-        method: request.method,
-        headers,
-        body: request.body,
-        redirect: "manual",
-      }),
-    );
   }
 
-  async fetch(request: Request): Promise<Response> {
-    const denied = staticAuthorization(this.env, request);
-    if (denied) return denied;
-    return this.handleRequest(request);
+  // Only the front-door Worker authenticates requests and selects the queue owner.
+  fetch(): Response {
+    return new Response("Unauthorized", { status: 401 });
   }
 
   // Trusted binding entry point after the front-door Worker verifies Access.
   async handleRequest(request: Request): Promise<Response> {
     try {
-      await this.recovered;
+      await this.recover();
       const url = new URL(request.url);
       const path = requestPath(request);
       if (
@@ -114,7 +106,7 @@ class RuntimeObject extends DurableObject<Env> {
     } catch (error) {
       return Response.json(
         { error: error instanceof Error ? error.message : String(error) },
-        { status: 400 },
+        { status: 500 },
       );
     }
   }
@@ -208,8 +200,8 @@ export function requestPath(request: Request): string[] {
 /** Shared records, vaults and the existing Rust sandbox manager. */
 export class ExoProvider extends RuntimeObject {
   // Trusted internal protocol transport; all store semantics remain in Rust.
-  requestExo(request: RawExoRequest): Promise<RawExoResponse> {
-    return this.runtime.requestExo(request);
+  requestExo(request: unknown): Promise<unknown> {
+    return this.runtime.call({ type: "request", request });
   }
 
   subscribe(
@@ -233,7 +225,8 @@ export class ExoThread extends RuntimeObject {
     super(ctx, env, true);
   }
   async alarm(): Promise<void> {
-    await this.runtime.call({ type: "recover" });
+    this.recovered = undefined;
+    await this.recover();
     if (await this.runtime.call<boolean>({ type: "has_pending_turns" }))
       await this.ctx.storage.setAlarm(Date.now() + 180_000);
   }

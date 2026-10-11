@@ -66,15 +66,6 @@ pub(crate) async fn handle(
     }
 }
 
-pub(crate) async fn request(
-    runtime: &Runtime,
-    request: exoharness::protocol::Request,
-) -> Result<exoharness::protocol::Response> {
-    exoharness::server::ExoHarnessServer::new(runtime.exoharness_handle())
-        .handle_request(request)
-        .await
-}
-
 async fn route(
     runtime: &Runtime,
     host: &Arc<Host>,

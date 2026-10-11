@@ -109,7 +109,22 @@ async fn session(
     Ok((thread, session))
 }
 
-struct Resolver(Arc<dyn ConversationHandle>);
+struct Resolver {
+    conversation: Arc<dyn ConversationHandle>,
+    rejected: Vec<(String, String)>,
+}
+#[derive(Serialize)]
+#[serde(untagged)]
+pub(crate) enum ProxyReply {
+    Allowed(ProxyHeaders),
+    Error { status: u16, error: String },
+}
+#[derive(Serialize)]
+pub(crate) struct ProxyHeaders {
+    pub headers: Vec<(String, String)>,
+    credentials: Vec<(String, String)>,
+    refreshed: bool,
+}
 #[async_trait]
 impl EgressCredentialResolver for Resolver {
     async fn resolve(
@@ -118,14 +133,17 @@ impl EgressCredentialResolver for Resolver {
         name: &str,
         destination: &EgressDestination,
     ) -> Result<String> {
-        let reference = exoharness::vault::find_secret(self.0.as_ref(), name)
+        let reference = exoharness::vault::find_secret(self.conversation.as_ref(), name)
             .await?
             .context("credential not found")?;
         exoharness::egress_credentials::vault::resolve_credential(
-            self.0.as_ref(),
+            self.conversation.as_ref(),
             &reference,
             destination,
-            None,
+            self.rejected
+                .iter()
+                .find(|(binding, _)| binding == name)
+                .map(|(_, value)| value.as_str()),
         )
         .await
     }
@@ -140,7 +158,8 @@ pub(crate) async fn proxy_headers(
     url: &str,
     method: &str,
     headers: Vec<(String, String)>,
-) -> Result<Vec<(String, String)>> {
+    rejected: Option<Vec<(String, String)>>,
+) -> Result<ProxyHeaders> {
     let url = url::Url::parse(url)?;
     ensure!(
         matches!(url.scheme(), "http" | "https")
@@ -182,9 +201,18 @@ pub(crate) async fn proxy_headers(
     for (name, value) in headers {
         map.append(
             HeaderName::from_bytes(name.as_bytes())?,
-            HeaderValue::from_str(&value)?,
+            HeaderValue::from_bytes(
+                &value
+                    .chars()
+                    .map(|c| u8::try_from(u32::from(c)))
+                    .collect::<std::result::Result<Vec<_>, _>>()?,
+            )?,
         );
     }
+    ensure!(
+        !map.contains_key(http::header::UPGRADE),
+        "protocol upgrades are not supported"
+    );
     let destination = EgressDestination {
         host: hostname.into(),
         port,
@@ -194,8 +222,12 @@ pub(crate) async fn proxy_headers(
     bindings.validate(&map, &destination, url.scheme() == "https")?;
     // Remove Connection-nominated fields before resolving any secrets.
     strip_hop_headers(&mut map)?;
-    bindings
-        .substitute(
+    let resolver = Resolver {
+        conversation,
+        rejected: rejected.unwrap_or_default(),
+    };
+    let credentials = bindings
+        .substitute_tracked(
             &mut map,
             &destination,
             &EgressIdentity {
@@ -205,12 +237,29 @@ pub(crate) async fn proxy_headers(
                     thread_id: thread,
                 },
             },
-            &Resolver(conversation),
+            &resolver,
         )
         .await?;
     map.remove(http::header::HOST);
     map.remove(http::header::CONTENT_LENGTH);
-    map.iter()
-        .map(|(name, value)| Ok((name.to_string(), value.to_str()?.to_owned())))
-        .collect()
+    let headers = map
+        .iter()
+        .map(|(name, value)| {
+            (
+                name.to_string(),
+                value.as_bytes().iter().map(|&b| char::from(b)).collect(),
+            )
+        })
+        .collect();
+    let refreshed = credentials.iter().any(|(name, value)| {
+        resolver
+            .rejected
+            .iter()
+            .any(|(binding, old)| binding == name && old != value)
+    });
+    Ok(ProxyHeaders {
+        headers,
+        credentials,
+        refreshed,
+    })
 }

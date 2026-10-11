@@ -87,7 +87,13 @@ export type HostRequest =
   | HarnessRequest
   | {
       type: "account_request";
-      request: import("../../typescript/harness/client").RawExoRequest;
+      request:
+        | import("../../typescript/harness/client").RawExoRequest
+        | {
+            type: "start_sandbox_process";
+            scope: import("../../typescript/harness/client").RawResourceScope;
+            request: { sandbox_id: string; lifecycle: "attached" | "detached" };
+          };
     }
   | {
       type: "subscribe";
@@ -102,7 +108,8 @@ export type HostRequest =
 
 export class RuntimeIO {
   readonly harnessProcesses = new SandboxProcessClient();
-  private readonly codex = createCodexHarness(codexVersion.trim());
+  private codex?: ReturnType<typeof createCodexHarness>;
+  private readonly processWaits = new Map<string, Promise<void>>();
   private readonly storage: Storage;
   constructor(
     private readonly ctx: DurableObjectState,
@@ -110,6 +117,51 @@ export class RuntimeIO {
     private readonly runtime: Runtime,
   ) {
     this.storage = new Storage(ctx.storage, env.ARTIFACTS, ctx.id.toString());
+  }
+
+  async discard(request: HostRequest, result: unknown): Promise<void> {
+    if (
+      request.type === "account_request" &&
+      request.request.type === "start_sandbox_process" &&
+      request.request.request.lifecycle === "attached" &&
+      result
+    ) {
+      const response = result as {
+        type: "sandbox_process";
+        process: { id: string };
+      };
+      if (response.type === "sandbox_process")
+        await this.env.PROVIDERS.getByName(this.env.ACCOUNT_ID).requestExo({
+          type: "cancel_sandbox_process",
+          scope: request.request.scope,
+          request: {
+            sandbox_id: request.request.request.sandbox_id,
+            process_id: response.process.id,
+            signal: null,
+          },
+        });
+    }
+    if (request.type === "subscribe" && result)
+      (result as Subscription)[Symbol.dispose]();
+    if (
+      request.type === "sandbox" &&
+      request.command.type === "start" &&
+      result
+    )
+      await (result as RunningProcess).process.close();
+    if (request.type === "sandbox" && request.command.type === "begin_activity")
+      await this.env.SANDBOXES.getByName(
+        request.command.sandbox_id,
+      ).endActivity(request.command.id);
+    if (request.type === "mcp" && request.command.type === "connect" && result)
+      await mcp(
+        {
+          type: "close",
+          client: result as import("@modelcontextprotocol/client").Client,
+        },
+        this.runtime,
+        new AbortController().signal,
+      );
   }
 
   async handle(request: HostRequest, signal: AbortSignal): Promise<unknown> {
@@ -177,12 +229,15 @@ export class RuntimeIO {
         const response = await new ResponsesRuntime({
           apiKey: r.api_key,
           baseURL: r.base_url ?? undefined,
-        }).complete({
-          model: r.model,
-          messages: r.messages,
-          tools: r.tools,
-          maxOutputTokens: r.max_output_tokens,
-        });
+        }).complete(
+          {
+            model: r.model,
+            messages: r.messages,
+            tools: r.tools,
+            maxOutputTokens: r.max_output_tokens,
+          },
+          { signal },
+        );
         return {
           response_id: null,
           messages: responseMessages(response),
@@ -251,7 +306,13 @@ export class RuntimeIO {
       const stub = this.env.SANDBOXES.getByName(command.sandbox_id);
       if (command.type === "end_activity") {
         await stub.endActivity(command.id);
-        this.ctx.waitUntil(stub.waitForProcesses());
+        if (!this.processWaits.has(command.sandbox_id)) {
+          const wait = stub
+            .waitForProcesses()
+            .finally(() => this.processWaits.delete(command.sandbox_id));
+          this.processWaits.set(command.sandbox_id, wait);
+          this.ctx.waitUntil(wait);
+        }
       } else {
         if (command.scope.type !== "thread")
           throw new Error("Cloudflare sandboxes require a thread scope");
@@ -379,9 +440,23 @@ export class RuntimeIO {
     const context = createTurnContext(client, payload);
     signal.throwIfAborted();
     await initLingua(linguaWasm);
-    if (payload.recovering) await this.codex.resumeTurn!(context);
-    else await this.codex.runTurn(context);
-    signal.throwIfAborted();
-    return null;
+    const codex = (this.codex ??= createCodexHarness(codexVersion.trim()));
+    const invalidate = () => {
+      if (this.codex === codex) this.codex = undefined;
+    };
+    signal.addEventListener("abort", invalidate, { once: true });
+    try {
+      signal.throwIfAborted();
+      if (payload.recovering) await codex.resumeTurn!(context);
+      else await codex.runTurn(context);
+      signal.throwIfAborted();
+      return null;
+    } catch (error) {
+      // Rust shuts down the process on failure; discard the JS handle as well.
+      invalidate();
+      throw error;
+    } finally {
+      signal.removeEventListener("abort", invalidate);
+    }
   }
 }

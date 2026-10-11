@@ -30,6 +30,7 @@ pub(crate) enum Operation {
         url: String,
         method: String,
         headers: Vec<(String, String)>,
+        rejected: Option<Vec<(String, String)>>,
     },
     HarnessRequest {
         thread_id: ThreadId,
@@ -39,7 +40,7 @@ pub(crate) enum Operation {
         request: crate::mcp::HttpRequest,
     },
     HasPendingTurns,
-    Recover,
+    DrainQueue,
     Watch {
         agent_id: AgentId,
         thread_id: ThreadId,
@@ -59,7 +60,7 @@ pub(crate) enum Output {
     Harness(executor::typescript_runtime::RuntimeResponsePayload),
     Exo(Box<exoharness::protocol::Response>),
     Policy(std::collections::HashMap<String, String>),
-    Headers(Vec<(String, String)>),
+    Headers(crate::policy::ProxyReply),
     Bool(bool),
     McpHttp(crate::mcp::HttpResponse),
     Unit(()),
@@ -67,6 +68,7 @@ pub(crate) enum Output {
 
 pub(crate) async fn run(
     runtime: Runtime,
+    provider: executor::LocalProvider,
     execution: Arc<crate::execution::WorkerExecutor>,
     host: Arc<Host>,
     updates: Arc<tokio::sync::Mutex<()>>,
@@ -81,7 +83,9 @@ pub(crate) async fn run(
     };
     match operation {
         Operation::Request { request } => Ok(Output::Exo(Box::new(
-            crate::http::request(&runtime, request).await?,
+            exoharness::server::ExoHarnessServer::new(runtime.exoharness_handle())
+                .handle_request(request)
+                .await?,
         ))),
         Operation::Progress { thread_id, event } => {
             execution.emit_stream(thread_id, event)?;
@@ -129,21 +133,31 @@ pub(crate) async fn run(
             url,
             method,
             headers,
+            rejected,
         } => {
-            let _guard = updates.lock().await;
-            Ok(Output::Headers(
-                crate::policy::proxy_headers(
-                    &runtime,
-                    &host,
-                    agent_id,
-                    thread_id,
-                    &sandbox_id,
-                    &url,
-                    &method,
-                    headers,
-                )
-                .await?,
-            ))
+            let result = crate::policy::proxy_headers(
+                &runtime,
+                &host,
+                agent_id,
+                thread_id,
+                &sandbox_id,
+                &url,
+                &method,
+                headers,
+                rejected,
+            )
+            .await;
+            Ok(Output::Headers(match result {
+                Ok(headers) => crate::policy::ProxyReply::Allowed(headers),
+                Err(error) => crate::policy::ProxyReply::Error {
+                    status: if error.is::<crate::host::HostError>() {
+                        500
+                    } else {
+                        403
+                    },
+                    error: format!("{error:#}"),
+                },
+            }))
         }
         Operation::HarnessRequest { thread_id, request } => Ok(Output::Harness(
             execution.request_runtime(thread_id, request).await?,
@@ -152,8 +166,10 @@ pub(crate) async fn run(
         Operation::HasPendingTurns => Ok(Output::Bool(
             !execution.coordinator.pending_threads().await?.is_empty(),
         )),
-        Operation::Recover => {
-            runtime.recover_unfinished_turns().await?;
+        Operation::DrainQueue => {
+            for thread in execution.coordinator.pending_threads().await? {
+                provider.wake_turn_queue(&runtime, thread).await?;
+            }
             Ok(Output::Unit(()))
         }
     }

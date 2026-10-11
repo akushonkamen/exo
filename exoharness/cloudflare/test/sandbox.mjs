@@ -133,6 +133,16 @@ test("production sandbox stays warm between turns and checkpoints on idle", asyn
   );
   await f.sandbox.beginActivity(identity, "first");
   await f.sandbox.beginActivity(identity, "overlapping");
+  await f.sandbox.acquire(identity, "", "/workspace", {}, null, 300_000);
+  assert.equal(
+    await f.storage.getAlarm(),
+    null,
+    "acquire must not schedule idle during a turn",
+  );
+  assert.equal(
+    f.calls.filter((call) => call[0] === "timeout").at(-1)[1],
+    660_000,
+  );
   await f.sandbox.endActivity("first");
   await f.storage.setAlarm(Date.now() - 1);
   await f.sandbox.alarm();
@@ -158,6 +168,10 @@ test("production sandbox stays warm between turns and checkpoints on idle", asyn
       .at(-1)[1].containerSnapshot,
     { id: "checkpoint" },
   );
+  const snapshots = f.calls.filter((call) => call === "snapshot").length;
+  await f.sandbox.terminate(identity);
+  assert.equal(f.calls.filter((call) => call === "snapshot").length, snapshots);
+  assert.equal(f.container.running, false);
 });
 
 test("production process invocation stays alive; checkpoint finishes before new work", async () => {
@@ -311,4 +325,16 @@ test("unserviceable environment resources fail before starting or saving a sandb
     assert.equal(f.calls.length, 0);
     assert.equal(await f.storage.get("image"), undefined);
   }
+});
+
+test("a failed checkpoint leaves a running sandbox scheduled for retry", async () => {
+  const f = fixture();
+  await f.sandbox.acquire(identity, "", "/workspace", {}, null, 300_000);
+  f.delayCheckpoint(Promise.reject(new Error("snapshot unavailable")));
+  await assert.rejects(f.sandbox.stop(), /snapshot unavailable/);
+  assert.equal(f.container.running, true);
+  assert((await f.storage.getAlarm()) > Date.now());
+  f.delayCheckpoint(Promise.resolve());
+  await f.sandbox.stop();
+  assert.equal(f.container.running, false);
 });
