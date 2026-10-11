@@ -688,7 +688,7 @@ stop_adapters() {
       terminate_process_tree "$pid"
     fi
   fi
-  pkill -f '(^|/)exo run --serve .*--adapters-only([[:space:]]|$)' >/dev/null 2>&1 || true
+  pkill -f '(^|/)exo run .*--serve.*--adapters-only([[:space:]]|$)' >/dev/null 2>&1 || true
   pkill -f "tsx exo/adapters/.*/worker.ts" >/dev/null 2>&1 || true
   rm -f "$pid_file"
 }

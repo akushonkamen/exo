@@ -322,8 +322,8 @@ exo environment create support-analyst-env --file environment.yaml
 exo run support-analyst --environment support-analyst-env
 ```
 
-An environment can also set `provider`, `default_workdir`, `file_system_mounts`, and `tool_modules` for
-[tool implementations](#tool-implementations). Host mounts refer to paths on the runtime host and can be read-only or writable.
+An environment can also set `provider`, `default_workdir`, and `file_system_mounts`.
+Host mounts refer to paths on the runtime host and can be read-only or writable.
 Unlike resources, host mounts expose the host's files directly.
 
 In addition to SmolVM, Exo supports a variety of local options including Apple Containers, Docker, Firecracker (with Lima

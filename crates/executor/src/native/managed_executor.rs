@@ -20,6 +20,21 @@ use tokio::sync::OnceCell;
 
 type ThreadExecutors = HashMap<ThreadId, Arc<OnceCell<ThreadExecutor>>>;
 
+fn remove_idle_executor(
+    threads: &mut ThreadExecutors,
+    thread: ThreadId,
+) -> Result<Option<Arc<OnceCell<ThreadExecutor>>>> {
+    if let Some(cell) = threads.get(&thread) {
+        // Calls retain the cell through their awaits. Check ownership while
+        // holding the cache lock so acquisition cannot race removal.
+        ensure!(
+            Arc::strong_count(cell) == 1,
+            "thread is busy; wait for its current turn or setup to finish before reconfiguring it"
+        );
+    }
+    Ok(threads.remove(&thread))
+}
+
 pub(crate) struct ManagedExecutor {
     state: Arc<dyn ExoHarness>,
     config: BasicExoHarnessConfig,
@@ -122,6 +137,7 @@ impl ManagedExecutor {
             .await?;
             let prepared = cell.get().context("managed executor was not initialized")?;
             if prepared.harness != config.harness || prepared.typescript != config.typescript {
+                drop(cell);
                 self.reset_thread(thread.record().id).await?;
                 continue;
             }
@@ -143,11 +159,10 @@ impl ManagedExecutor {
 #[async_trait]
 impl HarnessExecutor for ManagedExecutor {
     async fn reset_thread(&self, thread: ThreadId) -> Result<()> {
-        let executor = self
-            .threads
-            .lock()
-            .expect("managed executors poisoned")
-            .remove(&thread);
+        let executor = remove_idle_executor(
+            &mut self.threads.lock().expect("managed executors poisoned"),
+            thread,
+        )?;
         if let Some(cell) = executor
             && let Some(prepared) = cell.get()
         {
@@ -253,12 +268,8 @@ impl HarnessExecutor for ManagedExecutor {
         trace: Option<&dyn TurnExecutionTrace>,
     ) -> Result<()> {
         let cell = self
-            .threads
-            .lock()
-            .expect("managed executors poisoned")
-            .get(&thread.record().id)
-            .cloned()
-            .context("thread executor was not prepared")?;
+            .thread(agent, thread.as_ref(), agent_config, thread_config)
+            .await?;
         cell.get()
             .context("managed executor was not initialized")?
             .executor
@@ -287,12 +298,8 @@ impl HarnessExecutor for ManagedExecutor {
         trace: Option<&dyn TurnExecutionTrace>,
     ) -> Result<()> {
         let cell = self
-            .threads
-            .lock()
-            .expect("managed executors poisoned")
-            .get(&thread.record().id)
-            .cloned()
-            .context("thread executor was not prepared")?;
+            .thread(agent, thread.as_ref(), agent_config, thread_config)
+            .await?;
         cell.get()
             .context("managed executor was not initialized")?
             .executor
@@ -337,6 +344,24 @@ impl HarnessExecutor for ManagedExecutor {
         for result in results {
             result?;
         }
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn resetting_a_busy_thread_preserves_its_executor() -> Result<()> {
+        let thread = exoharness::Uuid7::now();
+        let mut threads = ThreadExecutors::from([(thread, Arc::new(OnceCell::new()))]);
+        let active = threads[&thread].clone();
+        assert!(remove_idle_executor(&mut threads, thread).is_err());
+        assert!(Arc::ptr_eq(&active, &threads[&thread]));
+        drop(active);
+        assert!(remove_idle_executor(&mut threads, thread)?.is_some());
+        assert!(threads.is_empty());
         Ok(())
     }
 }

@@ -1308,7 +1308,13 @@ impl BasicAgentHandle {
                 let keys = storage
                     .list_keys(path.parent().expect("record has a parent").join("events"))
                     .await?;
-                refresh_conversation_record(storage, &keys, &mut record).await?;
+                refresh_conversation_record(
+                    storage,
+                    path.parent().expect("record has a parent"),
+                    &keys,
+                    &mut record,
+                )
+                .await?;
                 Ok(Some(record))
             })
             .buffer_unordered(16)
@@ -1657,7 +1663,13 @@ impl ConversationHandle for BasicConversationHandle {
                 .storage
                 .list_keys(self.events_dir())
                 .await?;
-            refresh_conversation_record(&self.harness.inner.storage, &keys, &mut record).await?;
+            refresh_conversation_record(
+                &self.harness.inner.storage,
+                &conversation_dir,
+                &keys,
+                &mut record,
+            )
+            .await?;
         }
         let name = if record.name.is_empty() {
             thread_name_from_messages(&request.input)
@@ -2560,33 +2572,55 @@ async fn load_conversation_record(
     Ok(record)
 }
 
+#[derive(Default, Serialize, Deserialize)]
+struct ThreadTitle {
+    checked_through: Option<EventId>,
+    name: Option<String>,
+}
+
 async fn refresh_conversation_record(
     storage: &BasicObjectStore,
+    conversation_dir: &Path,
     keys: &[String],
     record: &mut ConversationRecord,
 ) -> Result<()> {
     // The event log is authoritative if a crash preceded the metadata write.
     record.latest_event_id = latest_event_id_from_keys(keys);
     if record.name.is_empty() {
+        let title_path = conversation_dir.join("title.json");
+        let mut title = storage
+            .get_json_if_exists::<ThreadTitle>(&title_path)
+            .await?
+            .unwrap_or_default();
+        if let Some(name) = &title.name {
+            record.name = name.clone();
+            return Ok(());
+        }
+        if title.checked_through == record.latest_event_id {
+            return Ok(());
+        }
         let mut keys = keys
             .iter()
-            .filter(|key| event_id_from_key(key).is_some())
+            .filter(|key| event_id_from_key(key).is_some_and(|id| Some(id) > title.checked_through))
             .collect::<Vec<_>>();
         keys.sort_by_key(|key| {
             event_batch_range_from_key(key)
                 .map(|(first, _)| first)
                 .or_else(|| event_id_from_key(key))
         });
-        for key in keys {
+        'events: for key in keys {
             for event in load_event_object(storage, key).await? {
                 if let EventData::Messages { messages, .. } = event.data
                     && let Some(name) = thread_name_from_messages(&messages)
                 {
                     record.name = name;
-                    return Ok(());
+                    title.name = Some(record.name.clone());
+                    break 'events;
                 }
             }
         }
+        title.checked_through = record.latest_event_id;
+        storage.put_json(title_path, &title).await?;
     }
     Ok(())
 }
@@ -2859,7 +2893,7 @@ mod thread_name_tests {
             })
             .await?;
         let thread = agent.new_thread(Default::default()).await?;
-        harness.inner.storage.fail_json_put_after(1);
+        harness.inner.storage.fail_json_put_after(2);
         assert!(
             thread
                 .begin_turn(BeginTurnRequest {
@@ -2902,5 +2936,68 @@ mod thread_name_tests {
             Some(format!("{}…", "界".repeat(80)))
         );
         assert_eq!(thread_name_from_messages(&input(" \n\t ")), None);
+    }
+
+    #[tokio::test]
+    async fn untitled_threads_skip_already_examined_history_and_accept_a_later_title() -> Result<()>
+    {
+        let temp = tempfile::TempDir::new()?;
+        let harness =
+            BasicExoHarness::new(crate::test_support::local_test_config(temp.path())).await?;
+        let agent = crate::test_support::new_test_agent(&harness, "titles").await?;
+        let thread = agent.new_thread(Default::default()).await?;
+        thread
+            .begin_turn(BeginTurnRequest {
+                turn: crate::test_support::new_test_turn_record(),
+                new_session: true,
+                input: vec![],
+                initial_events: Vec::new(),
+            })
+            .await?
+            .finish()
+            .await?;
+        assert!(
+            agent.list_threads(Default::default()).await?.threads[0]
+                .record()
+                .name
+                .is_empty()
+        );
+
+        let events_dir = Path::new("agents")
+            .join(agent.record().id.to_string())
+            .join("conversations")
+            .join(thread.record().id.to_string())
+            .join("events");
+        // Title lookup must not read these objects again after examining them.
+        for key in harness.inner.storage.list_keys(events_dir).await? {
+            harness
+                .inner
+                .storage
+                .put_bytes(key, b"unavailable".to_vec())
+                .await?;
+        }
+        assert!(
+            agent.list_threads(Default::default()).await?.threads[0]
+                .record()
+                .name
+                .is_empty()
+        );
+        thread
+            .begin_turn(BeginTurnRequest {
+                turn: crate::test_support::new_test_turn_record(),
+                new_session: true,
+                input: input("Investigate autoevals #223"),
+                initial_events: Vec::new(),
+            })
+            .await?
+            .finish()
+            .await?;
+        assert_eq!(
+            agent.list_threads(Default::default()).await?.threads[0]
+                .record()
+                .name,
+            "Investigate autoevals #223"
+        );
+        Ok(())
     }
 }
