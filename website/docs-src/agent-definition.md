@@ -134,7 +134,7 @@ resources:
     mode: ro
 ```
 
-`mount_path` is where the resource appears inside the sandbox. A git repository defaults to `/workspace/<repo name>`. Each thread
+`mount_path` is where the resource appears inside the sandbox. A git repository defaults to `/workspace/<resource name>`. Each thread
 gets its own isolated copy, so edits are localized to the thread. Resources are writable by default, so `mode: ro` makes it read-only.
 
 For a git URL, a new thread starts from the repository's default branch. You can set `checkout` to a branch name, tag, or
@@ -501,14 +501,18 @@ to run your agents; moving existing agents and threads between providers require
 
 ## Planned additions
 
+<!-- Keep this checklist aligned with the implementation backlog in /TODO.md. -->
+
 - [ ] Take the agent file as a positional argument in `exo agent create FILE` and `exo agent update FILE`, and resolve
   the agent's name from `--name`, then an optional frontmatter `name:`, then the file's stem, for `exo run` too. The slug
-  derives from the name, with no path hash.
+  derives from the name, with no path hash (`--slug` overrides). File runs sync or create; explicit create rejects
+  an existing slug, and update requires an existing agent and preserves its ID and threads.
 - [ ] Simplify the HTTP API. When `exo run FILE --serve` serves a single agent, expose agent-less routes:
-  `POST /exo/turn` creates a thread and returns its ID in the receipt, and `/exo/thread/THREAD/...` addresses existing
-  threads. Accept a plain string `input` as shorthand for a user message, so
+  `POST /exo/turn` creates a thread and submits its first input, and `/exo/thread/THREAD/...` addresses existing
+  threads. Add `POST /exo/agent/AGENT/turn` for the same new-thread flow on multi-agent or hosted servers. Return
+  thread and turn IDs in the existing receipt, preserving retry semantics. Accept a plain string `input` as shorthand for a user message, so
   `curl localhost:4766/exo/turn --json '{"input": "..."}'` works. For multi-agent servers, accept agent and thread slugs
-  wherever IDs are accepted, and register `exo run FILE` agents under the file's stem (no path hash).
+  wherever IDs are accepted. Keep the `/exo` base path until a prefix change is decided.
 - [ ] Flatten environment definitions: expose sandbox settings and network policy fields at the top level, removing the
   `config` and `policy` wrappers from files and the API, including top-level `allowed_tcp_ports`. The parser still requires `EnvironmentDefinition.config`, and
   networking lives under `config.policy`.
@@ -516,7 +520,7 @@ to run your agents; moving existing agents and threads between providers require
   the separate `--adapters-file` configuration. Make `name` optional, defaulting to `type`. Require each adapter's `vault` (no fallback to `global`) and read fixed
   secret names from it, eg. `bot-token` and `signing-secret` for Slack. Frontmatter currently accepts adapter names, with deployments supplied by
   the separate file; worker supervision already exists.
-- [ ] Default a Git resource's omitted `mount_path` to `/workspace/<repo name>`. `ResourceDefinition` still requires an
+- [ ] Default a Git resource's omitted `mount_path` to `/workspace/<resource name>`. `ResourceDefinition` still requires an
   explicit mount path.
 - [ ] Accept resource `checkout` as a Git ref string (branch, tag, or commit), replacing the tagged branch/commit object.
   Tags also need support in checkout resolution.
