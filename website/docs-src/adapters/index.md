@@ -5,8 +5,8 @@ description: Connect an agent to Slack, Discord, WhatsApp, Signal, or IRC.
 
 # Adapters
 
-::: info Planned
-This feature is not implemented yet.
+::: info Under construction
+Slack is implemented for local servers. The other adapters and hosted deployment are planned.
 :::
 
 Adapters let you talk to an agent from a messaging app. They submit messages to

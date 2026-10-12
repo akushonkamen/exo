@@ -9,14 +9,10 @@ import SlackSetupTabs from '../.vitepress/theme/SlackSetupTabs.vue';
 
 # Slack
 
-::: info Planned
-This feature is not implemented yet.
-:::
-
 Choose how Slack connects to Exo:
 
 - **Socket Mode** is the default and easiest for local setup. Exo connects outward to Slack, so you don't need a public URL or tunnel.
-- **HTTP** lets Slack call a public HTTPS endpoint. Braintrust and Cloudflare providers require this option and supply the endpoint.
+- **HTTP** lets Slack call a public HTTPS endpoint. Hosted providers will require this option.
 
 Both have the same conversation and reply behavior. Pick a tab below for the
 setup instructions. Slack also documents the two options:
@@ -81,6 +77,7 @@ oauth_config:
       - chat:write
       - channels:history
       - channels:read
+      - users:read
       - im:history
       - reactions:write
 settings:
@@ -96,22 +93,41 @@ settings:
     is_enabled: true
 ```
 
-Install the app and copy its bot token (`xoxb-...`) from **OAuth & Permissions**.
+### 2. Get the two tokens
 
-Under **Basic Information → App-Level Tokens**, generate an app token (`xapp-...`)
-with [`connections:write`](https://docs.slack.dev/reference/scopes/connections.write/).
+#### Bot token (`xoxb-...`)
 
-### 2. Store the credentials
+1. In your app's left sidebar, click **OAuth & Permissions**.
+2. At the top of the page, under **OAuth Tokens**, click **Install to Workspace**, then **Allow**.
+   If the app is already installed, you can go straight to the next step.
+3. Back on **OAuth & Permissions**, find **Bot User OAuth Token** in the **OAuth Tokens** section.
+   Click **Copy**. The value starts with `xoxb-`; use it for `SLACK_BOT_TOKEN` below.
 
-Set `SLACK_BOT_TOKEN` and `SLACK_APP_TOKEN` in your shell, then import them:
+The manifest above already supplies the bot's scopes.
+
+#### App token (`xapp-...`)
+
+1. In the left sidebar, click **Basic Information**.
+2. Scroll down to **App-Level Tokens**, below the **App Credentials** section.
+3. Click **Generate Token and Scopes**. Give the token a name, e.g. `exo`.
+4. Click **Add Scope**, select [`connections:write`](https://docs.slack.dev/reference/scopes/connections.write/),
+   then click **Generate**. This is the only scope the app token needs.
+5. Copy the generated token, which starts with `xapp-`; use it for `SLACK_APP_TOKEN` below.
+
+### 3. Store the credentials
+
+Paste the two token values into these commands, then run them in your shell:
 
 ```bash
+export SLACK_BOT_TOKEN='xoxb-...'
+export SLACK_APP_TOKEN='xapp-...'
+
 exo vault create support-slack
 exo vault secret create support-slack bot-token --token-env SLACK_BOT_TOKEN
 exo vault secret create support-slack app-token --token-env SLACK_APP_TOKEN
 ```
 
-### 3. Connect the agent
+### 4. Connect the agent
 
 Add this to the frontmatter of your agent file:
 
@@ -155,8 +171,7 @@ exo run support-analyst.md --serve
 
 The server prints its webhook URL, normally
 `http://127.0.0.1:4766/exo/adapter/slack`. Publish **only this path** over HTTPS using
-the [proxy rule below](#local-http-access). For a hosted deployment, use the provider's
-URL and commands in [Hosted providers](#hosted-providers).
+the [proxy rule below](#local-http-access). Hosted setup is described in [Hosted providers](#hosted-providers).
 
 The adapter waits for its credentials while the endpoint is available for Slack's
 URL verification. It starts accepting messages after you import them.
@@ -185,6 +200,7 @@ oauth_config:
       - chat:write
       - channels:history
       - channels:read
+      - users:read
       - im:history
       - reactions:write
 settings:
@@ -202,14 +218,28 @@ settings:
     request_url: https://exo.example.com/exo/adapter/slack
 ```
 
-Install the app and copy its bot token (`xoxb-...`) from **OAuth & Permissions**.
-Copy the **Signing Secret** from **Basic Information → App Credentials**.
+#### Bot token (`xoxb-...`)
+
+1. In your app's left sidebar, click **OAuth & Permissions**.
+2. At the top of the page, under **OAuth Tokens**, click **Install to Workspace**, then **Allow**.
+   If the app is already installed, you can go straight to the next step.
+3. Back on **OAuth & Permissions**, find **Bot User OAuth Token** in the **OAuth Tokens** section.
+   Click **Copy**. The value starts with `xoxb-`; use it for `SLACK_BOT_TOKEN` below.
+
+#### Signing secret
+
+1. In the left sidebar, click **Basic Information**.
+2. Scroll to **App Credentials** and find **Signing Secret**.
+3. Click **Show** and copy the value; use it for `SLACK_SIGNING_SECRET` below.
 
 ### 3. Store the credentials
 
-Set `SLACK_BOT_TOKEN` and `SLACK_SIGNING_SECRET` in your shell, then import them:
+Paste the bot token and signing secret into these commands, then run them in your shell:
 
 ```bash
+export SLACK_BOT_TOKEN='xoxb-...'
+export SLACK_SIGNING_SECRET='...'
+
 exo vault secret create support-slack bot-token --token-env SLACK_BOT_TOKEN
 exo vault secret create support-slack signing-secret --token-env SLACK_SIGNING_SECRET
 ```
@@ -250,9 +280,14 @@ This association is stored in the provider's identity store and applies across
 adapters. Email selects the identity; ownership is saved using its stable account
 ID. Add `--provider PROVIDER` for a hosted deployment.
 
-Configure the provider's trusted identity sources. For Slack email resolution,
-trust your workspace's directory and add `users:read` and `users:read.email` to the
-app's bot scopes, then reinstall it. Exo looks up the authenticated Slack sender
+Trust the workspace's directory for email resolution:
+
+```bash
+exo identity trust slack --workspace T123456
+```
+
+Add `users:read.email` to the app's bot scopes, then reinstall it. The manifests
+already include `users:read`. Exo looks up the authenticated Slack sender
 and resolves their account through that trusted source. An email typed into a
 message does not select a private vault. Guest and external workspace profiles
 aren't automatically trusted for this purpose.
@@ -262,6 +297,13 @@ If you want a stricter association, optionally pin the Slack workspace/user ID:
 ```bash
 exo identity bind slack --workspace T123456 --user U123456 --account alice@example.com
 ```
+
+Inspect these associations with `exo identity list`. To remove a pin, use
+`exo identity unbind slack --workspace T123456 --user U123456`. To stop trusting
+the directory, use `exo identity untrust slack --workspace T123456`.
+
+Configure local associations before starting the server. While it is running,
+manage them through an authenticated HTTP provider using `--provider PROVIDER`.
 
 That pin takes precedence over email lookup and is shared by adapters on the
 provider. It isn't required for the email-based path. `allowed_users` independently
@@ -274,6 +316,10 @@ the credential, without erasing earlier results. For example, if one participant
 checks out a private repository, another participant's turn can read that checkout.
 
 ## Hosted providers
+
+::: info Planned
+Hosted adapter deployment is not implemented yet. Local Socket Mode and HTTP are available.
+:::
 
 Braintrust and Cloudflare providers require `transport: http`. They supply the
 public webhook endpoint, so you don't run a local server or configure a tunnel.
@@ -333,8 +379,11 @@ Slack request verification instead of an Exo login.
 
 Open the app's **Messages** tab in Slack and send `What is 1+1?`. For a channel,
 invite the bot and mention it, e.g. `@Support analyst investigate this ticket`.
-Exo adds a 👀 reaction when your message is accepted. Only the final answer is
-posted, after the turn finishes; a reproduction can take several minutes.
+Exo adds a 👀 reaction when your message is accepted, then streams a reply.
+That reply shows assistant text as it arrives, the tools being called, and whether
+Exo is running tools or waiting for the model or your approval. Everything updates
+in the same reply, including the final answer. This uses the manifest's existing
+`chat:write` scope. A reproduction can take several minutes.
 Reply in that Slack thread to continue without mentioning the bot again.
 
 The adapter's credentials are separate from the model credential used by the
@@ -354,7 +403,7 @@ reinstall the app, and invite it to the channel.
 | --- | --- | --- |
 | `vault` | Required | Vault containing `bot-token`, plus `app-token` for Socket Mode or `signing-secret` for HTTP. |
 | `use_sender_vault` | `false` | Also use the submitter's associated vault for that turn, if available. `global` remains available. History and files stay shared within the conversation. |
-| `transport` | `socket` locally | `socket` or `http`. Braintrust and Cloudflare require explicit `http`. |
+| `transport` | `socket` | `socket` or `http`. Braintrust and Cloudflare require explicit `http`. |
 | `name` | `slack` | Distinguishes multiple Slack adapters on one agent. |
 | `trigger` | `mentions_only` | `mentions_only` accepts mentions, participating thread follow-ups, and DMs. `all_messages` also accepts other channel messages. Both apply user and channel restrictions. |
 | `allowed_channels` | Omitted | All eligible channels the bot has joined. A list restricts channel IDs; `[]` accepts no channel input. |

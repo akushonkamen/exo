@@ -408,21 +408,24 @@ async fn reusable_sandbox_process(
     reuse_key: &str,
     desired_sandbox_id: &SandboxId,
 ) -> Result<Option<(SandboxProcessId, bool, Option<u64>)>> {
-    let events = conversation
-        .get_events(Some(EventQuery {
-            cursor: None,
-            direction: Some(EventQueryDirection::Desc),
-            limit: Some(100),
-            session_id: None,
-            turn_id: None,
-            types: Some(vec![EventKind::custom(
-                TYPESCRIPT_SANDBOX_PROCESS_REUSE_EVENT,
-            )]),
-        }))
-        .await?
-        .events;
-
-    for event in events {
+    let mut cursor = None;
+    for _ in 0..100 {
+        let page = conversation
+            .get_events(Some(EventQuery {
+                cursor,
+                direction: Some(EventQueryDirection::Desc),
+                limit: Some(1),
+                session_id: None,
+                turn_id: None,
+                types: Some(vec![EventKind::custom(
+                    TYPESCRIPT_SANDBOX_PROCESS_REUSE_EVENT,
+                )]),
+            }))
+            .await?;
+        let Some(event) = page.events.into_iter().next() else {
+            break;
+        };
+        cursor = Some(event.id);
         let EventData::Custom {
             event_type,
             payload,
@@ -444,11 +447,14 @@ async fn reusable_sandbox_process(
         )
         .await;
         let Ok(status) = status else {
-            continue;
+            return Ok(None);
         };
         if status.status.is_running() {
             return Ok(Some((candidate.process_id, true, status.cursor)));
         }
+        // A newer generation replaced this reuse slot. Older processes carry
+        // stale execution state, even if one of them is still running.
+        return Ok(None);
     }
 
     Ok(None)
@@ -772,4 +778,82 @@ fn flush_output(
         }
     }
     Ok(())
+}
+
+#[cfg(all(test, feature = "native"))]
+mod reuse_tests {
+    use super::*;
+    use exoharness::{SandboxProcessStatus, SandboxProvider};
+
+    #[tokio::test]
+    async fn exited_generation_does_not_resurrect_an_older_running_process() -> Result<()> {
+        let temp = tempfile::tempdir()?;
+        let state =
+            exoharness::BasicExoHarness::new(crate::test_support::local_test_config(temp.path()))
+                .await?;
+        let agent = exoharness::test_support::new_test_agent(&state, "reuse").await?;
+        let thread = agent.new_thread(Default::default()).await?;
+        let sandbox_id = thread
+            .create_sandbox(exoharness::CreateSandboxRequest {
+                provider: SandboxProvider::LocalProcess,
+                image: "unused".into(),
+                ..exoharness::test_support::sandbox_request()
+            })
+            .await?;
+        let mut processes = Vec::new();
+        for command in [
+            vec!["/bin/cat".into()],
+            vec!["/bin/sh".into(), "-c".into(), "exit 0".into()],
+        ] {
+            let process = thread
+                .start_sandbox_process(StartSandboxProcessRequest {
+                    sandbox_id: sandbox_id.clone(),
+                    name: None,
+                    command,
+                    env: Default::default(),
+                    cwd: None,
+                    mode: SandboxProcessMode::Exec,
+                    stdin: SandboxProcessStdin::Open,
+                    output: Default::default(),
+                    lifecycle: SandboxProcessLifecycle::Attached,
+                })
+                .await?;
+            thread
+                .add_events(AddEventsRequest {
+                    session_id: None,
+                    turn_id: None,
+                    data: vec![EventData::Custom {
+                        event_type: TYPESCRIPT_SANDBOX_PROCESS_REUSE_EVENT.into(),
+                        payload: serde_json::to_value(TypeScriptSandboxProcessReuseEvent {
+                            reuse_key: "codex".into(),
+                            sandbox_id: sandbox_id.clone(),
+                            process_id: process.id.clone(),
+                        })?,
+                    }],
+                })
+                .await?;
+            processes.push(process.id);
+        }
+        let exited = thread
+            .wait_sandbox_process(exoharness::WaitSandboxProcessRequest {
+                sandbox_id: sandbox_id.clone(),
+                process_id: processes[1].clone(),
+            })
+            .await?;
+        assert_eq!(exited, SandboxProcessStatus::Exited { exit_code: 0 });
+        assert!(
+            reusable_sandbox_process(thread.as_ref(), "codex", &sandbox_id)
+                .await?
+                .is_none()
+        );
+        thread
+            .cancel_sandbox_process(exoharness::CancelSandboxProcessRequest {
+                sandbox_id: sandbox_id.clone(),
+                process_id: processes[0].clone(),
+                signal: None,
+            })
+            .await?;
+        thread.stop_sandbox(sandbox_id).await?;
+        Ok(())
+    }
 }

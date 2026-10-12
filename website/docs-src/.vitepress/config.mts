@@ -129,6 +129,7 @@ export default defineConfig({
             { text: "WhatsApp", link: "/adapters/whatsapp" },
             { text: "Signal", link: "/adapters/signal" },
             { text: "IRC", link: "/adapters/irc" },
+            { text: "Custom adapter", link: "/adapters/custom" },
           ],
         },
         { text: "Development", link: "/development/" },

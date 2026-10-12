@@ -663,3 +663,43 @@ async fn oauth_probe_preserves_challenges_and_closes_anonymous_sessions() -> any
     );
     Ok(())
 }
+
+#[tokio::test]
+async fn unavailable_private_server_does_not_hide_public_tools() -> anyhow::Result<()> {
+    let public = Fixture::with_state(ServerState {
+        anonymous: true,
+        ..Default::default()
+    })
+    .await;
+    let private = Fixture::start(false).await;
+    let servers = vec![public.config("public"), private.config("private")];
+    let tools =
+        McpToolSet::connect_available_with_provider(&servers, Arc::new(McpCredentials::default()))
+            .await?;
+    assert!(
+        tools
+            .tools()
+            .iter()
+            .all(|tool| tool.server_name == "public")
+    );
+    assert_eq!(tools.tools().len(), 2);
+    tools.close().await?;
+    let invalid = McpCredentials::from(std::collections::HashMap::from([(
+        "private".into(),
+        "wrong-token".into(),
+    )]));
+    let error = match McpToolSet::connect_available_with_provider(&servers, Arc::new(invalid)).await
+    {
+        Ok(tools) => {
+            tools.close().await?;
+            anyhow::bail!("invalid supplied credentials must fail");
+        }
+        Err(error) => error,
+    };
+    assert!(
+        error
+            .downcast_ref::<exo_mcp::McpAuthenticationError>()
+            .is_some_and(|auth| auth.credential_supplied)
+    );
+    Ok(())
+}

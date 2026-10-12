@@ -421,6 +421,7 @@ impl Runtime {
             }
         };
         let accepted_key = HarnessTurnKey::new(scope.agent_id, scope.thread_id, accepted.turn.id);
+        let mut replay = false;
         if accepted.duplicate {
             provider
                 .turns
@@ -432,11 +433,14 @@ impl Runtime {
                 .turns
                 .register_observer(accepted_key, self, sender.clone());
             match journal_status(thread.as_ref(), &accepted.turn).await {
-                Ok(JournalStatus::Finished(result)) => provider.turns.replay_completion(
-                    accepted_key,
-                    &sender,
-                    result.map(ExecutionStreamEvent::Completed),
-                ),
+                Ok(JournalStatus::Finished(result)) => {
+                    provider.turns.replay_completion(
+                        accepted_key,
+                        &sender,
+                        result.map(ExecutionStreamEvent::Completed),
+                    );
+                    replay = true;
+                }
                 Ok(_) => {}
                 Err(error) => {
                     tracing::error!(
@@ -451,6 +455,12 @@ impl Runtime {
         if let Err(error) = self.spawn_queue(provider, scope).await {
             provider.turns.stop_observers(accepted_key, &error);
             tracing::error!(?scope, %error, "accepted turn retained; failed to wake queue");
+        }
+        if replay {
+            let stream = self
+                .watch_turn(thread.as_ref(), accepted.turn.clone(), None)
+                .await?;
+            return Ok((accepted.turn, stream));
         }
         Ok((
             accepted.turn,
@@ -744,7 +754,8 @@ impl Runtime {
                     .get()
                     .context("caller-scoped queue recovery is unavailable")?(
                     principal.clone()
-                )?
+                )
+                .await?
                 .as_ref()
                 .clone(),
                 None => self.root_runtime(),

@@ -783,11 +783,19 @@ async fn approval_decisions_cancellation_sessions_and_reconnect() -> Result<()> 
                 .await?;
             session = Some(turn.session_id);
             if action != "already_allowed" {
-                let first = tokio::time::timeout(Duration::from_secs(5), stream.next())
-                    .await?
-                    .context("approval event")??;
-                let crate::ExecutionStreamEvent::ApprovalRequested { approval, .. } = first else {
-                    panic!("expected approval, got {first:?}")
+                let approval = loop {
+                    let event = tokio::time::timeout(Duration::from_secs(5), stream.next())
+                        .await?
+                        .context("approval event")??;
+                    match event {
+                        crate::ExecutionStreamEvent::ApprovalRequested { approval, .. } => {
+                            break approval;
+                        }
+                        crate::ExecutionStreamEvent::Completed(_) => {
+                            panic!("turn finished without approval")
+                        }
+                        _ => {}
+                    }
                 };
                 assert_eq!(
                     f.release.available_permits(),

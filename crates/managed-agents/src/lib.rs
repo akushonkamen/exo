@@ -1,4 +1,7 @@
+pub mod adapters;
+mod frontmatter;
 pub mod http;
+pub mod identity;
 pub mod mcp;
 pub mod permissions;
 pub mod vaults;
@@ -24,10 +27,10 @@ fn default_true() -> bool {
 }
 
 #[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct AgentFrontmatter {
+#[serde(deny_unknown_fields, bound(deserialize = "R: Deserialize<'de>"))]
+pub struct AgentFrontmatter<R = exoharness::resources::ResourceDefinition> {
     #[serde(default)]
-    pub resources: Vec<exoharness::resources::ResourceDefinition>,
+    pub resources: Vec<R>,
     pub name: Option<String>,
     pub harness: String,
     pub model: AgentModelConfig,
@@ -42,7 +45,7 @@ pub struct AgentFrontmatter {
     #[serde(default)]
     pub tool_creation: bool,
     #[serde(default)]
-    pub adapters: Vec<String>,
+    pub adapters: Vec<adapters::AdapterDefinition>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -84,8 +87,9 @@ impl AgentDefinition {
         let (yaml_end, body_start) = delimiter.ok_or_else(|| {
             anyhow!("agent file is missing the closing frontmatter delimiter (---)")
         })?;
-        let frontmatter: AgentFrontmatter =
-            serde_yaml_ng::from_str(&contents[..yaml_end]).context("invalid agent frontmatter")?;
+        // Include YAML's opening document marker so locations refer to the
+        // Markdown file, including its first line.
+        let frontmatter = frontmatter::parse(&normalized[..4 + yaml_end])?;
         let instructions = contents[body_start..].trim().to_string();
         for (field, value) in [
             ("harness", frontmatter.harness.as_str()),
@@ -98,18 +102,7 @@ impl AgentDefinition {
         }
         mcp::validate_servers(&frontmatter.mcp_servers)?;
         exoharness::resources::validate_resources(&frontmatter.resources)?;
-        for (index, name) in frontmatter.adapters.iter().enumerate() {
-            if name.is_empty()
-                || !name
-                    .chars()
-                    .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
-            {
-                bail!("adapter names may only contain letters, numbers, '-' and '_'");
-            }
-            if frontmatter.adapters[..index].contains(name) {
-                bail!("duplicate adapter: {name}");
-            }
-        }
+        adapters::validate(&frontmatter.adapters)?;
         Ok(Self {
             frontmatter,
             instructions,
@@ -122,7 +115,7 @@ impl AgentDefinition {
         let source = std::fs::read_to_string(path)
             .with_context(|| format!("reading agent file {}", path.display()))?;
         let mut definition =
-            Self::parse(source).with_context(|| format!("agent file {}", path.display()))?;
+            Self::parse(source).map_err(|error| frontmatter::with_file(error, path))?;
         definition.path = Some(path.to_path_buf());
         Ok(definition)
     }

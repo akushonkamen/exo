@@ -428,6 +428,7 @@ async fn mcp_authentication_errors_are_concise_unless_verbose() -> Result<()> {
         let mut report = crate::CliError {
             error,
             verbose: true,
+            mcp_setup_command: None,
         };
         assert!(format!("{report:?}").contains("Caused by:"));
         report.verbose = false;

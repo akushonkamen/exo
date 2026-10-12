@@ -165,7 +165,8 @@ pub(crate) fn validate_http_command(command: &crate::Commands) -> Result<()> {
             ..
         }
         | Commands::Environment { .. }
-        | Commands::Vault { .. } => Ok(()),
+        | Commands::Vault { .. }
+        | Commands::Identity { .. } => Ok(()),
         _ => bail!("this command is not supported by the managed-agent HTTP provider"),
     }
 }

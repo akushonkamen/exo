@@ -1,7 +1,7 @@
 # Managed adapters
 
-Design sketch for replacing the self-agent adapter path. The setup docs live in
-[`website/docs-src/adapters/`](../website/docs-src/adapters/index.md). This is not implemented yet.
+Design and implementation notes for replacing the self-agent adapter path. The setup docs live in
+[`website/docs-src/adapters/`](../website/docs-src/adapters/index.md). Slack is implemented for local servers. Other transports and hosted deployment are planned.
 
 ## Model
 
@@ -174,6 +174,8 @@ Keep explicit pin create/list/delete operations available, with this command sha
 
 ```bash
 exo identity list
+exo identity trust slack --workspace T123456
+exo identity untrust slack --workspace T123456
 exo identity bind slack --workspace T123456 --user U123456 --account ankur@example.com
 exo identity unbind slack --workspace T123456 --user U123456
 ```
@@ -361,16 +363,17 @@ completed successfully.
 
 ## Output
 
-Follow saved events for adapter-originated turns with a persisted cursor. Deliver the turn's final
-assistant response automatically. Normalize final response semantics across Codex,
-Claude Code, and Pi at the runtime boundary; do not interpret a harness's private
-SDK objects in the adapter. Commentary, reasoning, and raw tool output are not
-automatically posted to chat.
+Submit the input to the runtime and render its execution stream, just like the CLI.
+That stream supplies setup status, assistant text, tools, approvals, committed
+messages, and completion. Normalize these semantics across Codex, Claude Code,
+and Pi at the runtime boundary; do not interpret a harness's private SDK objects
+in the adapter or query its event history to recover an answer.
 
 Queue output with deterministic IDs derived from the turn/event, destination, and
 chunk index. Persist the outbox entries before advancing the observer cursor.
-Resuming an observer must neither rerun a completed turn nor enqueue its answer
-twice. Split long answers using each transport's limits and formatting rules.
+The runtime resumes a disconnected stream from its saved checkpoint. Resuming
+must neither rerun a completed turn nor enqueue its answer twice. Split long
+answers using each transport's limits and formatting rules.
 
 The outbox owns delivery retries, rate limits, and external message IDs. External
 delivery is at least once where the provider offers no idempotent send: a crash
@@ -378,10 +381,12 @@ after a successful send but before recording its acknowledgement can duplicate a
 message. Record delivery failures and show them in server logs. A failed or
 cancelled turn gets a short status response, not a fabricated successful answer.
 
-For the first Slack implementation, send one answer after completion. Updating a
-progress message, attachments, and richer formatting can follow without changing
-the turn admission or routing model. No model commentary or partial answer is
-posted while execution is in progress; the receipt reaction covers that interval.
+Slack uses one native streaming reply per turn. Assistant text deltas append to
+that reply; tool calls, results, and waits update task cards in the same reply.
+The outbox records its Slack message ID, buffers updates, and closes the stream
+when the runtime reports completion. After a restart, the adapter asks the runtime
+to resume the stream and keeps using that Slack message ID. Live and recovered
+events go through the same renderer; history replay belongs to the runtime.
 
 ## Interactive turns
 
@@ -433,7 +438,15 @@ No live code is removed by this design-only pass. The replacement should remove
 the old path as part of the first working implementation, rather than add a second
 runtime or compatibility schema.
 
-## First implementation
+## Implementation status
+
+Slack's local implementation uses `slack-morphism` for its Web API, signatures, Socket Mode, and Block Kit.
+The core is in `crates/executor/src/managed_agents/adapters/`; it submits through the existing turn queue
+and persists its inbox, routes, caller authorities, and outbox in provider storage. Identity associations
+reuse the protected provider identity store. Other transports remain unported; retain their TypeScript SDK
+workers for a later JSONL bridge. Hosted deployment is also still planned.
+
+## Implementation plan
 
 1. Typed inline definitions, deployment reconciliation, bot credential provisioning,
    and adapter admission policies.

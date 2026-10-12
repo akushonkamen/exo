@@ -59,7 +59,25 @@ exo vault secret create global --preset github --token-env GITHUB_PAT
 Git resources select this credential explicitly with `credential: github`; it isn't inferred from the repository URL.
 Public repositories can be cloned without it. See [Resources](../agent-definition#resources).
 
-For an MCP server that supports OAuth, you can log in using its resource URL:
+To set up the MCP servers in an agent file:
+
+```bash
+exo vault secret create --from-agent agent.md
+```
+
+Exo skips credentials already available in the target vault, then walks through login for servers that advertise OAuth.
+Servers that work anonymously without OAuth metadata are skipped. Credentials are saved under each server's name,
+with permission to access its exact MCP URL.
+The target vault defaults to `global` locally and `personal` on an authenticated remote provider. You can select a vault
+and a particular server explicitly. If the server uses an API key instead of OAuth, import it from an environment variable:
+
+```bash
+exo vault secret create personal braintrust --from-agent agent.md --token-env BRAINTRUST_API_KEY
+```
+
+This sets up MCP credentials; model keys and Git credentials still use the presets above.
+
+For an MCP server that supports OAuth, you can also log in using its resource URL:
 
 ```bash
 exo vault secret create global helpdesk --url https://helpdesk.example.com/mcp

@@ -1,6 +1,5 @@
 import {
   HarnessToolRegistry,
-  registerAdapterTools,
   registerSkillTools,
   type BuiltInToolName,
 } from "@exo/harness";
@@ -26,7 +25,6 @@ export const practicalProfile: ExoProfile = {
   registerTools(tools, context) {
     const libraryTools = new HarnessToolRegistry(context);
     registerSchedulerTools(libraryTools);
-    registerAdapterTools(libraryTools);
     registerIntrospectionTools(libraryTools);
     registerSandboxTools(libraryTools);
     registerMemoryTools(libraryTools);

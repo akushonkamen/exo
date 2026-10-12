@@ -1,3 +1,5 @@
+#[cfg(feature = "native")]
+pub mod adapters;
 pub(crate) mod config;
 pub mod service;
 #[cfg(feature = "native")]

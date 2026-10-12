@@ -46,6 +46,10 @@ pub(crate) struct BasicObjectStore {
 }
 
 impl BasicObjectStore {
+    pub(crate) fn raw(&self) -> Arc<dyn Storage> {
+        self.store.clone()
+    }
+
     pub(crate) fn new(store: Arc<dyn Storage>) -> Self {
         Self {
             store,

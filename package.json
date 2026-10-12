@@ -14,7 +14,6 @@
     "lint:fix": "oxlint --fix --deny-warnings .",
     "prepare": "node scripts/setup-hooks.mjs",
     "rendezvous:demo": "node exo/scripts/rendezvous-demo.mjs",
-    "slack:setup": "node exo/scripts/slack-setup.mjs",
     "test": "vitest run",
     "typecheck": "tsgo --noEmit -p tsconfig.json",
     "docs:build": "vitepress build website/docs-src",

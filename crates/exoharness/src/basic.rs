@@ -68,6 +68,9 @@ use sessions::LocalSessions;
 #[path = "basic/resource_tests.rs"]
 mod resource_tests;
 
+#[cfg(all(test, feature = "basic-backend"))]
+#[path = "basic/event_query_tests.rs"]
+mod event_query_tests;
 #[path = "basic/turn_queue.rs"]
 mod turn_queue;
 
@@ -381,6 +384,14 @@ impl BasicExoHarness {
 
 #[async_trait]
 impl ExoHarness for BasicExoHarness {
+    fn provider_storage(&self) -> Result<Arc<dyn crate::Storage>> {
+        anyhow::ensure!(
+            self.caller.is_none(),
+            "provider storage is restricted to the runtime host"
+        );
+        Ok(self.inner.storage.raw())
+    }
+
     fn with_caller(&self, caller: crate::access::Caller) -> Result<Arc<dyn ExoHarness>> {
         self.inner
             .access_policy
@@ -1776,40 +1787,13 @@ impl ConversationHandle for BasicConversationHandle {
                 thread_id: self.record.id,
             })
             .await?;
-        let mut events = load_events(&self.harness.inner.storage, &self.conversation_dir()).await?;
-        if let Some(query) = query {
-            if let Some(session_id) = query.session_id {
-                events.retain(|event| event.session_id == Some(session_id));
-            }
-            if let Some(turn_id) = query.turn_id {
-                events.retain(|event| event.turn_id == Some(turn_id));
-            }
-            if let Some(types) = query.types {
-                events.retain(|event| {
-                    let event_kind = event.data.kind();
-                    types.iter().any(|kind| kind.matches(&event_kind))
-                });
-            }
-            match query.direction.unwrap_or(EventQueryDirection::Asc) {
-                EventQueryDirection::Asc => {
-                    if let Some(cursor) = query.cursor {
-                        events.retain(|event| event.id > cursor);
-                    }
-                }
-                EventQueryDirection::Desc => {
-                    events.reverse();
-                    if let Some(cursor) = query.cursor {
-                        events.retain(|event| event.id < cursor);
-                    }
-                }
-            }
-            if let Some(limit) = query.limit {
-                events.truncate(limit as usize);
-            }
-        }
-        // The cursor is a resume position, even on the final page; Basic's history
-        // cache needs it to avoid replaying events. Callers that scan until an empty
-        // page pay another full log read here, which is acceptable for Basic.
+        let events = load_event_query(
+            &self.harness.inner.storage,
+            &self.conversation_dir(),
+            &query.unwrap_or_default(),
+        )
+        .await?;
+        // The cursor is a resume position, even on the final page.
         let cursor = events.last().map(|event| event.id);
         Ok(GetEventsResult { events, cursor })
     }
@@ -1825,8 +1809,20 @@ impl ConversationHandle for BasicConversationHandle {
         let existing = match after_exclusive {
             Bound::Unbounded => Vec::new(),
             _ => {
-                let events =
-                    load_events(&self.harness.inner.storage, &self.conversation_dir()).await?;
+                let cursor = match after_exclusive {
+                    Bound::Excluded(id) => Some(id),
+                    Bound::Included(_) => None,
+                    Bound::Unbounded => unreachable!(),
+                };
+                let events = load_event_query(
+                    &self.harness.inner.storage,
+                    &self.conversation_dir(),
+                    &EventQuery {
+                        cursor,
+                        ..Default::default()
+                    },
+                )
+                .await?;
                 events
                     .into_iter()
                     .filter(|event| matches_bound(event.id, &after_exclusive))
@@ -2539,6 +2535,92 @@ async fn load_events(storage: &BasicObjectStore, conversation_dir: &Path) -> Res
         .flatten()
         .collect::<Vec<_>>();
     events.sort_by_key(|event| event.id);
+    Ok(events)
+}
+
+async fn load_event_query(
+    storage: &BasicObjectStore,
+    conversation_dir: &Path,
+    query: &EventQuery,
+) -> Result<Vec<Event>> {
+    if query.limit == Some(0) {
+        return Ok(Vec::new());
+    }
+    let descending = query.direction == Some(EventQueryDirection::Desc);
+    let mut keys = storage
+        .list_keys(conversation_dir.join("events"))
+        .await?
+        .into_iter()
+        .filter_map(|key| {
+            let (first, last) = event_batch_range_from_key(&key)
+                .or_else(|| event_id_from_key(&key).map(|id| (id, id)))?;
+            let visible = query.cursor.is_none_or(|cursor| {
+                if descending {
+                    first < cursor
+                } else {
+                    last > cursor
+                }
+            });
+            visible.then_some((first, last, key))
+        })
+        .collect::<Vec<_>>();
+    if descending {
+        keys.sort_by_key(|(_, last, _)| std::cmp::Reverse(*last));
+    } else {
+        keys.sort_by_key(|(first, _, _)| *first);
+    }
+    let loading =
+        stream::iter(keys)
+            .map(|(first, last, key)| async move {
+                (first, last, load_event_object(storage, &key).await)
+            })
+            .buffered(16);
+    futures::pin_mut!(loading);
+    let mut events: Vec<Event> = Vec::new();
+    while let Some((first, last, batch)) = loading.next().await {
+        if let Some(limit) = query.limit
+            && events.len() >= limit as usize
+            && events.last().is_some_and(|event| {
+                if descending {
+                    last < event.id
+                } else {
+                    first > event.id
+                }
+            })
+        {
+            break;
+        }
+        events.extend(batch?.into_iter().filter(|event| {
+            query
+                .session_id
+                .is_none_or(|id| event.session_id == Some(id))
+                && query.turn_id.is_none_or(|id| event.turn_id == Some(id))
+                && query.cursor.is_none_or(|cursor| {
+                    if descending {
+                        event.id < cursor
+                    } else {
+                        event.id > cursor
+                    }
+                })
+                && query
+                    .types
+                    .as_ref()
+                    .is_none_or(|types| types.iter().any(|kind| kind.matches(&event.data.kind())))
+        }));
+        if let Some(limit) = query.limit {
+            events.sort_by_key(|event| event.id);
+            if descending {
+                events.reverse();
+            }
+            events.truncate(limit as usize);
+        }
+    }
+    if query.limit.is_none() {
+        events.sort_by_key(|event| event.id);
+        if descending {
+            events.reverse();
+        }
+    }
     Ok(events)
 }
 

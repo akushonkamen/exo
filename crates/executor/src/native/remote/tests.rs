@@ -1287,7 +1287,7 @@ async fn host_configuration_requires_the_operator() -> Result<()> {
     for extra in [
         "tools: [module.ts]",
         "tool_creation: true",
-        "adapters: [inbox]",
+        "adapters:\n  - type: slack\n    vault: support-slack",
     ] {
         let definition = exo_managed_agents::AgentDefinition::parse(format!(
             "---\nharness: basic\nmodel:\n  name: test\n{extra}\n---\nWork"

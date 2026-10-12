@@ -1,4 +1,3 @@
-pub(crate) mod adapter;
 pub(crate) mod agent_sandbox;
 pub(crate) mod braintrust;
 #[cfg(test)]
@@ -22,12 +21,6 @@ pub(crate) mod scheduler_runtime;
 pub(crate) mod scheduler_store;
 pub(crate) mod scheduler_types;
 pub(crate) mod typescript;
-pub use adapter::AdapterStore;
-pub use adapter::{
-    AdapterAttachment, AdapterAttachmentKind, AdapterConfig, AdapterEventRecord, AdapterEventType,
-    AdapterRecord, AdapterSource, NewAdapter, WorkerSecretEnvVar,
-};
-pub use adapter::{AdapterRunOptions, run_adapters_watch};
 pub use braintrust::BraintrustRuntimeConfig;
 pub use conversation_events::{
     HOST_EVENT_ADAPTER_RUNNER_DRAINING, HOST_EVENT_ADAPTER_RUNNER_STARTED, HOST_EVENT_REBOOT,

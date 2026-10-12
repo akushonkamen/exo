@@ -144,8 +144,8 @@ their copies. With a remote provider, local paths refer to files on the provider
 
 ### Adapters
 
-::: info Planned
-This feature is not implemented yet.
+::: info Under construction
+Slack is implemented for local servers. The other adapters and hosted deployment are planned.
 :::
 
 Adapters connect an agent to chat providers like Slack, WhatsApp, and Discord. Configure them in the agent's frontmatter:
@@ -496,22 +496,10 @@ to run your agents; moving existing agents and threads between providers require
   thread and turn IDs in the existing receipt, preserving retry semantics. Accept a plain string `input` as shorthand for a user message, so
   `curl localhost:4766/exo/turn --json '{"input": "..."}'` works. For multi-agent servers, accept agent and thread slugs
   wherever IDs are accepted. Keep the `/exo` base path until a prefix change is decided.
-- [ ] Replace the self-agent adapter path with a managed client: configure adapters inline, map chats to persistent threads,
-  submit input through the durable turn queue, and deliver final responses automatically. Remove `--adapters-file` and the
-  model-facing adapter tools. Make `name` optional, defaulting to `type`. Token-based adapters require an explicit vault,
-  without a fallback to `global`; Slack uses `bot-token` plus `app-token` for Socket Mode or `signing-secret` for HTTP.
-  Keep bot credentials and linked-device
-  profiles separate from thread credentials. Implement durable input receipts and reply recovery, beginning with Slack;
-  then port Discord, WhatsApp, Signal, and IRC. See [Adapters](adapters/) for the proposed setup.
-- [ ] Allow Slack users admitted by adapter policy to run with shared `global` credentials. Associate private vaults
-  with shared identities by email, resolve users through trusted identity sources, and support optional stricter
-  workspace/user-ID pins. Keep these associations provider-wide. Add `use_sender_vault` (default `false`): when enabled,
-  each turn uses `global` plus the submitter's associated vault, while the Slack conversation keeps one shared Exo thread.
-  Replace credential bindings and authenticated clients between turns, without accumulating private vaults on the thread.
-  Reauthorize queued input and approval actions after identity/ownership changes or revocation. Add `allowed_users`, reject Slack Connect
-  by default, and require HTTP on the Braintrust and
-  Cloudflare providers. Publish only the local webhook path when API authentication is disabled. Support HTTP manifest
-  provisioning before bot credentials are imported, and send a receipt reaction before the final answer.
+- [ ] Port Discord, WhatsApp, Signal, and IRC onto the managed adapter path. Slack now supports inline definitions,
+  Socket Mode and HTTP, persistent conversation mappings, final replies, approvals, receipt reactions, and restart recovery.
+- [ ] Implement hosted adapter deployment and HTTP provisioning for Braintrust and Cloudflare; require `transport: http` there.
+  See [Adapters](adapters/) for setup and the planned providers.
 - [ ] Support tool declarations in agent frontmatter and inherit them during execution. `tools` currently accepts module
   paths, and client tool declarations must be supplied as `frontend_tools` on each HTTP turn request.
 - [ ] Move TypeScript tool module registration and path resolution into environments, bind implementations by declared tool

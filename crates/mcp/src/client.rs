@@ -173,12 +173,36 @@ impl McpToolSet {
             .await
     }
 
+    /// Public MCP servers stay available; omit auth-required servers only when
+    /// this caller has no credential. Invalid supplied credentials remain errors.
+    pub async fn connect_available_with_provider(
+        servers: &[McpServerConfig],
+        credentials: Arc<dyn McpCredentialProvider>,
+    ) -> Result<Self> {
+        Self::connect_http(
+            servers,
+            credentials,
+            &vec![http_client()?; servers.len()],
+            true,
+        )
+        .await
+    }
+
     /// Connect using a caller-supplied HTTP client for each server, in the same order.
     /// Hosts can enforce destination restrictions, DNS pinning and redirect policies.
     pub async fn connect_with_http_clients(
         servers: &[McpServerConfig],
         credentials: Arc<dyn McpCredentialProvider>,
         clients: &[reqwest::Client],
+    ) -> Result<Self> {
+        Self::connect_http(servers, credentials, clients, false).await
+    }
+
+    async fn connect_http(
+        servers: &[McpServerConfig],
+        credentials: Arc<dyn McpCredentialProvider>,
+        clients: &[reqwest::Client],
+        omit_missing_auth: bool,
     ) -> Result<Self> {
         validate_servers(servers)?;
         ensure!(
@@ -224,12 +248,24 @@ impl McpToolSet {
                 ))
             }
             .await;
-            connected.with_context(|| format!("connecting MCP server {}", server.name))
+            match connected {
+                Err(error)
+                    if omit_missing_auth
+                        && error
+                            .downcast_ref::<McpAuthenticationError>()
+                            .is_some_and(|auth| !auth.credential_supplied) =>
+                {
+                    Ok(None)
+                }
+                result => result
+                    .map(Some)
+                    .with_context(|| format!("connecting MCP server {}", server.name)),
+            }
         }))
         .await?;
         let mut set = Self::default();
         let mut names = HashSet::new();
-        for (connection, tools) in connected {
+        for (connection, tools) in connected.into_iter().flatten() {
             for tool in &tools {
                 if !names.insert(tool.name.clone()) {
                     bail!("duplicate exposed MCP tool: {}", tool.name);

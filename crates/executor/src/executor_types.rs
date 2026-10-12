@@ -308,6 +308,15 @@ impl ExecutionStreamHandle {
 
 #[derive(Debug, Clone)]
 pub enum ExecutionStreamEvent {
+    Messages {
+        messages: Vec<Message>,
+    },
+    Checkpoint {
+        event_id: EventId,
+    },
+    Status {
+        message: String,
+    },
     ApprovalRequested {
         turn: exoharness::TurnRecord,
         approval: crate::permissions::ApprovalRequest,
@@ -351,6 +360,9 @@ pub struct ShellToolResult {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum TypeScriptStreamEvent {
+    Status {
+        message: String,
+    },
     FirstChunk {
         ttft_ms: u64,
     },
@@ -370,6 +382,7 @@ pub enum TypeScriptStreamEvent {
 
 pub fn to_execution_stream_event(event: TypeScriptStreamEvent) -> ExecutionStreamEvent {
     match event {
+        TypeScriptStreamEvent::Status { message } => ExecutionStreamEvent::Status { message },
         TypeScriptStreamEvent::FirstChunk { ttft_ms } => ExecutionStreamEvent::FirstChunk {
             ttft: Duration::from_millis(ttft_ms),
         },

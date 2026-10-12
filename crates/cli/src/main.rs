@@ -2,6 +2,7 @@ mod env;
 #[cfg(test)]
 mod env_tests;
 mod environment;
+mod identity;
 mod managed_agents;
 #[cfg(test)]
 mod mount_tests;
@@ -501,6 +502,7 @@ impl Cli {
         match &self.command {
             Commands::Environment { runtime, .. }
             | Commands::Vault { runtime, .. }
+            | Commands::Identity { runtime, .. }
             | Commands::Run { runtime, .. }
             | Commands::Agent { runtime, .. }
             | Commands::Conversation { runtime, .. }
@@ -533,6 +535,13 @@ impl Cli {
 
 #[derive(Debug, Subcommand)]
 enum Commands {
+    /// Associate private vaults with users and trust identity sources.
+    Identity {
+        #[command(flatten)]
+        runtime: RuntimeArgs,
+        #[command(subcommand)]
+        command: identity::IdentityCommands,
+    },
     /// Configure reusable agent environments and their backends.
     Environment {
         #[command(flatten)]
@@ -909,6 +918,7 @@ enum ConversationMountCommands {
 struct CliError {
     error: anyhow::Error,
     verbose: bool,
+    mcp_setup_command: Option<String>,
 }
 
 impl std::fmt::Debug for CliError {
@@ -916,6 +926,15 @@ impl std::fmt::Debug for CliError {
         if !self.verbose
             && let Some(auth) = self.error.downcast_ref::<exo_mcp::McpAuthenticationError>()
         {
+            if !auth.credential_supplied
+                && let Some(command) = &self.mcp_setup_command
+            {
+                return write!(
+                    f,
+                    "connecting MCP server {}. No credential was selected. Run `{command}`, then start a new thread.",
+                    auth.server_name
+                );
+            }
             let help = if auth.credential_supplied {
                 "The server rejected the token. Check its validity and permissions."
             } else {
@@ -932,17 +951,68 @@ impl std::fmt::Debug for CliError {
     }
 }
 
+fn mcp_setup_command(cli: &Cli) -> Option<String> {
+    let Commands::Run { thread, .. } = &cli.command else {
+        return None;
+    };
+    let file = thread.agent_file()?.to_str()?;
+    let mut args = vec!["exo"];
+    if let Some(provider) = cli.provider_profile.as_deref() {
+        args.extend(["--provider", provider]);
+    }
+    let default_root = std::env::var_os("EXO_HOME")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".exo")));
+    if default_root.as_deref() != Some(cli.root.as_path()) {
+        args.extend(["--root", cli.root.to_str()?]);
+    }
+    if let Some(directory) = &cli.config_dir {
+        args.extend(["--config-dir", directory.to_str()?]);
+    }
+    args.extend(["vault", "secret", "create"]);
+    let runtime = cli.runtime();
+    if let Some(backend) = runtime.secret_backend {
+        args.extend([
+            "--secret-backend",
+            match backend {
+                SecretBackendArg::AppleKeychain => "apple-keychain",
+                SecretBackendArg::File => "file",
+            },
+        ]);
+    }
+    if let Some(path) = &runtime.master_key_path {
+        args.extend(["--master-key-path", path.to_str()?]);
+    }
+    if let Some(path) = &runtime.env_file {
+        args.extend(["--env-file", path.to_str()?]);
+    }
+    if let Some(vault) = thread.vault.last() {
+        args.push(vault);
+    }
+    args.extend(["--from-agent", file]);
+    shlex::try_join(args).ok()
+}
+
 #[tokio::main]
 async fn main() -> Result<(), CliError> {
     let cli = Cli::parse();
+    let mcp_setup_command = mcp_setup_command(&cli);
     let verbose = matches!(&cli.command,
         Commands::Run { thread, .. }
         if thread.verbosity == Verbosity::Full
     );
     if matches!(&cli.command, Commands::Run { serve: false, .. }) {
-        turn_display::init_progress(verbose).map_err(|error| CliError { error, verbose })?;
+        turn_display::init_progress(verbose).map_err(|error| CliError {
+            error,
+            verbose,
+            mcp_setup_command: mcp_setup_command.clone(),
+        })?;
     }
-    run(cli).await.map_err(|error| CliError { error, verbose })
+    run(cli).await.map_err(|error| CliError {
+        error,
+        verbose,
+        mcp_setup_command,
+    })
 }
 
 async fn run(mut cli: Cli) -> Result<()> {
@@ -1075,7 +1145,7 @@ async fn run_selected(
     let state_root = local.then(|| cli.state_root()).transpose()?;
     let harness = providers::runtime(
         &cli,
-        http_client,
+        http_client.clone(),
         definition.as_ref(),
         &env,
         state_root.as_deref(),
@@ -1091,6 +1161,8 @@ async fn run_selected(
         Commands::Provider { .. } => {
             unreachable!("management commands return before harness startup")
         }
+        Commands::Identity { command, .. } => identity::run(&harness, http_client.as_ref(), state_root.as_deref(), command.into_request()).await?,
+        Commands::Vault { command: vaults::VaultCommands::Bind { vault, email }, .. } => identity::run(&harness, http_client.as_ref(), state_root.as_deref(), exo_managed_agents::identity::IdentityCommand::BindVault { vault, email }).await?,
         Commands::Vault { command, .. } => vaults::run(harness.exoharness_handle().as_ref(), &command, &env_vars, local).await?,
         Commands::Run { thread, serve: true, service, .. } => {
             let agent = if thread.agent.is_some() {
@@ -2000,7 +2072,8 @@ fn command_refs_mut(command: &mut Commands) -> (Option<&mut String>, Option<&mut
         Commands::FirecrackerBridge
         | Commands::Provider { .. }
         | Commands::Environment { .. }
-        | Commands::Vault { .. } => (None, None),
+        | Commands::Vault { .. }
+        | Commands::Identity { .. } => (None, None),
     }
 }
 

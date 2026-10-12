@@ -34,7 +34,17 @@ pub(crate) async fn connect_mcp(
         Some(selection) => {
             selection.validate_servers(&servers)?;
             let credentials = managed::vaults::VaultMcpCredentials::new(vaults, selection.clone());
-            Arc::new(McpToolSet::connect_with_provider(&servers, Arc::new(credentials)).await?)
+            Arc::new(
+                if thread
+                    .caller()
+                    .is_some_and(|caller| caller.principal.starts_with("adapter-"))
+                {
+                    McpToolSet::connect_available_with_provider(&servers, Arc::new(credentials))
+                        .await?
+                } else {
+                    McpToolSet::connect_with_provider(&servers, Arc::new(credentials)).await?
+                },
+            )
         }
         None => Arc::default(),
     };

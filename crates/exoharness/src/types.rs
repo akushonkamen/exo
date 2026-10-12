@@ -45,6 +45,13 @@ impl ResourceScope {
 
 #[async_trait]
 pub trait ExoHarness: VaultContext {
+    /// Host-owned services may persist provider metadata outside agent artifacts.
+    /// Caller-scoped harnesses must not expose the provider's underlying storage.
+    #[cfg(feature = "store")]
+    fn provider_storage(&self) -> Result<Arc<dyn crate::Storage>> {
+        anyhow::bail!("this provider does not expose host storage")
+    }
+
     fn with_caller(&self, _caller: crate::access::Caller) -> Result<Arc<dyn ExoHarness>> {
         anyhow::bail!("this provider does not support caller-scoped execution")
     }
@@ -781,6 +788,13 @@ pub struct SandboxRecord {
     pub tcp_ports: Vec<u16>,
     /// The harness's recorded running state, not a service health check.
     pub running: bool,
+    pub default_workdir: String,
+    pub file_system_mounts: Vec<FileSystemMount>,
+    pub durable_file_systems: Vec<DurableFileSystem>,
+    pub resources: Option<SandboxResourceShape>,
+    pub policy: EgressPolicy,
+    pub idle_seconds: u64,
+    pub attachment: Option<SandboxAttachment>,
 }
 
 pub(crate) fn canonical_egress_host(host: &str) -> Result<String> {

@@ -105,6 +105,19 @@ impl RuntimeClient {
             .await
     }
 
+    pub async fn manage_identity(
+        &self,
+        command: &crate::identity::IdentityCommand,
+    ) -> Result<crate::identity::IdentityConfiguration> {
+        self.http
+            .json(
+                self.http
+                    .request(Method::POST, "identity/manage")?
+                    .json(command),
+            )
+            .await
+    }
+
     pub async fn create_agent(
         &self,
         request: &exoharness::NewAgentRequest,

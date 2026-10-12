@@ -55,6 +55,7 @@ pub struct RuntimeHttpService {
     callers: Arc<std::sync::Mutex<std::collections::HashMap<String, Arc<Runtime>>>>,
     account_id: String,
     session: Option<String>,
+    adapters: Option<Arc<crate::managed_agents::adapters::AdapterService>>,
 }
 
 impl RuntimeHttpService {
@@ -76,6 +77,7 @@ impl RuntimeHttpService {
             callers: Arc::default(),
             account_id: "local".into(),
             session: None,
+            adapters: None,
             agent_id: None,
             bearer_token: token
                 .map(|token| {
@@ -93,13 +95,32 @@ impl RuntimeHttpService {
         self
     }
 
+    pub fn with_adapters(
+        mut self,
+        adapters: Arc<crate::managed_agents::adapters::AdapterService>,
+    ) -> Self {
+        self.adapters = Some(adapters);
+        self
+    }
+
     pub fn spawn_recovery(&self) -> Result<()> {
         // Incoming turns can wake older queue entries before discovery finishes.
-        if self.auth.is_some() {
+        if self.auth.is_some() || self.adapters.is_some() {
             let service = self.clone();
             self.runtime
                 .set_recovery_resolver(Arc::new(move |principal: String| {
-                    service.caller_runtime(principal)
+                    let service = service.clone();
+                    Box::pin(async move {
+                        if principal.starts_with("adapter-") {
+                            let adapters = service
+                                .adapters
+                                .clone()
+                                .context("adapter recovery is unavailable")?;
+                            adapters.recover_caller(&principal).await
+                        } else {
+                            service.caller_runtime(principal)
+                        }
+                    })
                 }))?;
         }
         let service = self.clone();
@@ -185,6 +206,9 @@ pub fn server(listener: TcpListener, service: Arc<RuntimeHttpService>) -> std::i
             configure(cfg);
         })
     })
+    // The host coordinates signals with adapter and runtime shutdown.
+    .disable_signals()
+    .shutdown_timeout(5)
     .listen(listener)?;
     recovery_service
         .spawn_recovery()
@@ -193,10 +217,23 @@ pub fn server(listener: TcpListener, service: Arc<RuntimeHttpService>) -> std::i
 }
 
 pub fn configure(cfg: &mut web::ServiceConfig) {
+    // These exact callback routes authenticate using Slack signatures. The
+    // remaining API routes keep their normal Exo authentication.
+    cfg.service(
+        web::resource(format!("{RUNTIME_PATH}/adapter/{{name}}"))
+            .app_data(web::PayloadConfig::new(16 * 1024 * 1024))
+            .route(web::post().to(slack_webhook)),
+    );
+    cfg.service(
+        web::resource(format!("{RUNTIME_PATH}/agent/{{agent}}/adapter/{{name}}"))
+            .app_data(web::PayloadConfig::new(16 * 1024 * 1024))
+            .route(web::post().to(slack_webhook)),
+    );
     cfg.service(
         web::scope(RUNTIME_PATH)
             .wrap(from_fn(authorize))
             .route("/identity", web::get().to(identity))
+            .route("/identity/manage", web::post().to(manage_identity))
             .route(
                 "/agent/{agent_id}/thread/{thread_id}/environment",
                 web::put().to(update_thread_environment),
@@ -275,6 +312,84 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
                 web::get().to(watch),
             ),
     );
+}
+
+async fn slack_webhook(
+    service: web::Data<Arc<RuntimeHttpService>>,
+    request: HttpRequest,
+    body: web::Bytes,
+) -> Result<HttpResponse, Error> {
+    let adapters = service
+        .adapters
+        .as_ref()
+        .ok_or_else(|| ErrorNotFound("adapters are not configured"))?;
+    let content = std::str::from_utf8(&body).map_err(ErrorBadRequest)?;
+    let signature = request
+        .headers()
+        .get("x-slack-signature")
+        .and_then(|value| value.to_str().ok());
+    let timestamp = request
+        .headers()
+        .get("x-slack-request-timestamp")
+        .and_then(|value| value.to_str().ok());
+    let form = request
+        .mime_type()?
+        .is_some_and(|mime| mime == mime::APPLICATION_WWW_FORM_URLENCODED);
+    let challenge = adapters
+        .slack_webhook(
+            request.match_info().get("agent"),
+            request
+                .match_info()
+                .get("name")
+                .ok_or_else(|| ErrorBadRequest("adapter name required"))?,
+            content,
+            form,
+            signature,
+            timestamp,
+        )
+        .await
+        .map_err(|error| {
+            if error.downcast_ref::<slack_morphism::signature_verifier::SlackEventSignatureVerifierError>().is_some() {
+                ErrorUnauthorized("Slack signature verification failed")
+            } else if error.downcast_ref::<serde_json::Error>().is_some() || error.downcast_ref::<serde_urlencoded::de::Error>().is_some() {
+                ErrorBadRequest("invalid Slack payload")
+            } else {
+                tracing::warn!(%error, "Slack webhook retained for retry");
+                actix_web::error::ErrorServiceUnavailable("Slack adapter is not ready; retry")
+            }
+        })?;
+    #[derive(serde::Serialize)]
+    struct Challenge {
+        challenge: String,
+    }
+    Ok(match challenge {
+        Some(challenge) => HttpResponse::Ok().json(Challenge { challenge }),
+        None => HttpResponse::Ok().finish(),
+    })
+}
+
+async fn manage_identity(
+    service: Service,
+    body: web::Json<exo_managed_agents::identity::IdentityCommand>,
+) -> Result<HttpResponse, Error> {
+    if let Some(caller) = service.runtime.exoharness_handle().caller() {
+        caller
+            .policy
+            .check_operator(&caller.principal)
+            .await
+            .map_err(ErrorUnauthorized)?;
+    }
+    let adapters = service
+        .adapters
+        .as_ref()
+        .ok_or_else(|| ErrorNotFound("identity service is unavailable"))?;
+    Ok(HttpResponse::Ok().json(
+        adapters
+            .identities()
+            .execute(body.into_inner())
+            .await
+            .map_err(ErrorBadRequest)?,
+    ))
 }
 
 fn configure_vaults(cfg: &mut web::ServiceConfig) {

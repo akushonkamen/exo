@@ -1823,6 +1823,7 @@ impl StoredSandbox {
 
 impl From<StoredSandbox> for SandboxRecord {
     fn from(sandbox: StoredSandbox) -> Self {
+        let policy = sandbox.policy();
         Self {
             id: sandbox.id,
             name: sandbox.name,
@@ -1830,6 +1831,13 @@ impl From<StoredSandbox> for SandboxRecord {
             image: sandbox.image,
             tcp_ports: sandbox.tcp_ports,
             running: sandbox.running,
+            default_workdir: sandbox.default_workdir.unwrap_or_default(),
+            file_system_mounts: sandbox.file_system_mounts,
+            durable_file_systems: sandbox.durable_file_systems,
+            resources: sandbox.resources,
+            policy,
+            idle_seconds: sandbox.idle_seconds,
+            attachment: sandbox.attachment,
         }
     }
 }

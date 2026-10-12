@@ -42,7 +42,6 @@ describe("Exo profiles", () => {
     ]);
     profile.registerTools(tools, context);
 
-    expect(tools.get("create_adapter")?.source).toBe("library");
     expect(tools.get("snapshot_sandbox")?.source).toBe("library");
     expect(tools.get("web_search")?.source).toBe("library");
     expect(tools.get("rebuild_and_restart_exo")?.source).toBe("built_in");
