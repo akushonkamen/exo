@@ -4,7 +4,7 @@ use crate::{FileSystemMountMode, Uuid7};
 fn resource(source: ResourceSource) -> ResourceDefinition {
     ResourceDefinition {
         name: "code".into(),
-        mount_path: "/workspace".into(),
+        mount_path: Some("/workspace".into()),
         mode: FileSystemMountMode::ReadWrite,
         source,
     }
@@ -303,6 +303,39 @@ fn directory_copy_preserves_links_and_excludes_runtime_state() -> Result<()> {
 }
 
 #[test]
+fn checkout_resolves_branches_tags_and_full_commits() -> Result<()> {
+    let temp = tempfile::tempdir()?;
+    let repo = temp.path().join("repo");
+    fs::create_dir(&repo)?;
+    git(&repo, ["init", "--initial-branch=main"], None)?;
+    let tagged = commit(&repo, "release")?;
+    git(&repo, ["tag", "v1"], None)?;
+    let latest = commit(&repo, "latest")?;
+    git(
+        &repo,
+        ["update-ref", "refs/remotes/origin/main", &latest],
+        None,
+    )?;
+    let store = ResourceStore::new(&temp.path().join("state"))?;
+    for (reference, branch, revision) in [
+        ("main", Some("main"), &latest),
+        ("v1", None, &tagged),
+        (tagged.as_str(), None, &tagged),
+    ] {
+        assert_eq!(
+            store.resolve_checkout(&repo, Some(reference), None)?,
+            (branch.map(str::to_owned), revision.clone())
+        );
+    }
+    assert!(
+        store
+            .resolve_checkout(&repo, Some("missing"), None)
+            .is_err()
+    );
+    Ok(())
+}
+
+#[test]
 fn imported_git_is_independent_and_preserves_dirty_index() -> Result<()> {
     let temp = tempfile::tempdir()?;
     let source = temp.path().join("source");
@@ -360,9 +393,7 @@ fn check_git_thread_isolation(store: &ResourceStore, temp: &tempfile::TempDir) -
     let definition = resource(ResourceSource::GitRepository {
         path: None,
         url: Some(url::Url::from_directory_path(&source).unwrap().to_string()),
-        checkout: Some(GitCheckout::Branch {
-            name: "main".into(),
-        }),
+        checkout: Some("main".into()),
         credential: None,
     });
     let prepared = vec![PreparedResource {
@@ -578,13 +609,13 @@ fn sandbox_git_trust_is_limited_to_mounted_git_resources() -> Result<()> {
         checkout: None,
         credential: None,
     });
-    definition.mount_path = repository.to_string_lossy().into_owned();
+    definition.mount_path = Some(repository.to_string_lossy().into_owned());
     let mut unmounted = definition.clone();
     unmounted.name = "unmounted".into();
-    unmounted.mount_path = temp.path().join("unmounted").to_string_lossy().into_owned();
+    unmounted.mount_path = Some(temp.path().join("unmounted").to_string_lossy().into_owned());
     let mut directory = unmounted.clone();
     directory.name = "directory".into();
-    directory.mount_path = other.to_string_lossy().into_owned();
+    directory.mount_path = Some(other.to_string_lossy().into_owned());
     directory.source = ResourceSource::Directory {
         path: other.clone(),
     };
@@ -668,4 +699,85 @@ fn sandbox_git_trust_is_limited_to_mounted_git_resources() -> Result<()> {
         );
     }
     Ok(())
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn cancel_resource_command_kills_children_after_parent_exits() -> Result<()> {
+    let temp = tempfile::tempdir()?;
+    let pid_file = temp.path().join("pid");
+    let cancel = tokio_util::sync::CancellationToken::new();
+    let _cancel_on_drop = cancel.clone().drop_guard();
+    let task = {
+        let cancel = cancel.clone();
+        let pid_file = pid_file.clone();
+        tokio::task::spawn_blocking(move || {
+            let mut command = Command::new("/bin/sh");
+            command.args(["-c", "sleep 3 & echo $! > \"$1\"", "sh"]);
+            command.arg(pid_file);
+            command_output(command, Some(&cancel), None)
+        })
+    };
+    tokio::time::timeout(std::time::Duration::from_secs(2), async {
+        while !pid_file.exists() {
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    })
+    .await?;
+    let pid: i32 = fs::read_to_string(&pid_file)?.trim().parse()?;
+    // The shell exits, but its child keeps stdout open.
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    cancel.cancel();
+    let error = tokio::time::timeout(std::time::Duration::from_secs(1), task)
+        .await??
+        .unwrap_err();
+    assert!(error.to_string().contains("resource preparation canceled"));
+    tokio::time::timeout(std::time::Duration::from_secs(1), async {
+        while unsafe { libc::kill(pid, 0) } == 0 {
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    })
+    .await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn cancel_resource_preparation_waiting_for_cache_lock() -> Result<()> {
+    let temp = tempfile::tempdir()?;
+    let store = ResourceStore::new(temp.path())?;
+    let _lock = store.lock("cache")?;
+    let cancel = tokio_util::sync::CancellationToken::new();
+    let _cancel_on_drop = cancel.clone().drop_guard();
+    let task = tokio::task::spawn_blocking({
+        let store = store.with_cancellation(cancel.clone());
+        move || store.lock("cache")
+    });
+    cancel.cancel();
+    let error = tokio::time::timeout(std::time::Duration::from_secs(1), task)
+        .await??
+        .unwrap_err();
+    assert!(error.to_string().contains("resource preparation canceled"));
+    Ok(())
+}
+
+#[test]
+fn git_progress_recognizes_phases_without_displaying_errors() {
+    assert_eq!(
+        git_progress(b"remote: Counting objects:  12% (3/25)\r"),
+        Some(("Counting objects for", 12))
+    );
+    assert_eq!(
+        git_progress(b"Receiving objects:  42% (42/100), 1.2 MiB | 2 MiB/s\r"),
+        Some(("Downloading", 42))
+    );
+    assert_eq!(
+        git_progress(b"Resolving deltas: 100% (100/100), done.\n"),
+        Some(("Resolving deltas for", 100))
+    );
+    assert_eq!(
+        git_progress(b"Updating files:  50% (5/10)\r"),
+        Some(("Checking out", 50))
+    );
+    assert_eq!(git_progress(b"Receiving objects: 101% (101/100)"), None);
+    assert_eq!(git_progress(b"fatal: credential rejected (100%)"), None);
 }

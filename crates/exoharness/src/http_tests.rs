@@ -542,6 +542,14 @@ impl ManagedSandboxBackend for SnapshotTestSandboxBackend {
         bail!("snapshot test backend does not support attachment")
     }
 
+    async fn suspend(
+        &self,
+        _request: SandboxRequest,
+        _kind: crate::SnapshotKind,
+    ) -> crate::Result<SnapshotPayload> {
+        bail!("snapshot test backend does not support suspension")
+    }
+
     async fn acquire_from_snapshot(
         &self,
         _request: SandboxRequest,
@@ -696,7 +704,7 @@ async fn http_vault_contexts_and_secrets_round_trip() -> crate::Result<()> {
     let sibling = sibling.attach_vaults(vaults.clone()).await?;
     let environment = crate::EnvironmentDefinition {
         name: "updated".into(),
-        config: crate::CreateSandboxRequest {
+        ..(crate::CreateSandboxRequest {
             tcp_ports: vec![],
             provider: SandboxProvider::LocalProcess,
             image: "local".into(),
@@ -709,7 +717,8 @@ async fn http_vault_contexts_and_secrets_round_trip() -> crate::Result<()> {
             durable_file_systems: None,
             policy: None,
             idle_seconds: None,
-        },
+        })
+        .into()
     };
     let sibling = sibling.update_environment(environment.clone()).await?;
     assert_eq!(sibling.record().environment.as_ref(), Some(&environment));

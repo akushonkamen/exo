@@ -152,6 +152,7 @@ impl SnapshotFormat {
     pub const SpritesRef: Self = Self::from_static("sprites-ref");
     /// Reference to a `.smolmachine` pack on the local disk.
     pub const SmolvmMachinePack: Self = Self::from_static("smolvm-machine-pack");
+    pub const SmolvmFilesystemRef: Self = Self::from_static("smolvm-filesystem-ref-v1");
     /// Reference to an immutable bundle in a Firecracker host's private root.
     pub const FirecrackerHostRef: Self = Self::from_static("firecracker-host-ref");
     pub const FirecrackerFilesystemRef: Self = Self::from_static("firecracker-filesystem-ref-v1");
@@ -489,13 +490,12 @@ pub trait ManagedSandboxBackend: Send + Sync {
     /// Capture the requested state and release execution resources. Restore it
     /// with acquire_from_snapshot; unsupported kinds must leave the source intact.
     /// The returned snapshot has its own lifetime and is deleted with delete_snapshot.
+    /// Used by the hosted sandbox service to checkpoint before releasing a VM.
     async fn suspend(
         &self,
-        _request: SandboxRequest,
-        _kind: crate::SnapshotKind,
-    ) -> Result<SnapshotPayload> {
-        bail!("sandbox backend does not support suspension")
-    }
+        request: SandboxRequest,
+        kind: crate::SnapshotKind,
+    ) -> Result<SnapshotPayload>;
 
     /// Permanently destroy the sandbox addressed by `request` and any retained
     /// backend state. Unlike stopping a handle, termination must be idempotent.

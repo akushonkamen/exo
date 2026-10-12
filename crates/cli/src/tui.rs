@@ -506,20 +506,14 @@ impl ChatRepl {
                         }
                         other if other == "/snapshot" || other.starts_with("/snapshot ") => {
                             let mut arguments = other.split_whitespace().skip(1);
-                            let kind = arguments.next().map(parse_snapshot_kind);
+                            let kind = arguments.next().map(str::parse::<exoharness::SnapshotKind>);
                             let id = arguments.next().map(str::to_owned);
-                            if arguments.next().is_some() {
-                                println!("usage: /snapshot <filesystem|full> [<sandbox-id>]");
-                            } else {
-                                match kind {
-                                    Some(Ok(kind)) => print_lines(
-                                        snapshot_lines(self.conversation.as_ref(), id, kind).await,
-                                    ),
-                                    Some(Err(error)) => println!("{error}"),
-                                    None => println!(
-                                        "usage: /snapshot <filesystem|full> [<sandbox-id>]"
-                                    ),
-                                }
+                            match (kind, arguments.next()) {
+                                (Some(Ok(kind)), None) => print_lines(
+                                    snapshot_lines(self.conversation.as_ref(), id, kind).await,
+                                ),
+                                (Some(Err(error)), None) => println!("{error}"),
+                                _ => println!("usage: /snapshot <filesystem|full> [<sandbox-id>]"),
                             }
                         }
                         "/snapshots" => {
@@ -962,7 +956,9 @@ fn print_help() {
     println!("  /verbosity <level>   set tool output detail: minimal, compact, or full");
     println!("  /cost | /usage       summarize token usage and dollar cost");
     println!("  /snapshot <filesystem|full> [<id>]  capture the requested sandbox state");
-    println!("                       (defaults to the latest one if no id is given)");
+    println!(
+        "                                      (defaults to the latest one if no id is given)"
+    );
     println!("  /snapshots           list snapshots taken in this conversation");
     println!("  /rewind <id>         restore the sandbox to a previous snapshot");
     println!("  /teleport <provider> move the live sandbox to another provider");
@@ -984,14 +980,6 @@ async fn cost_summary(conversation: &dyn ConversationHandle) -> Result<Vec<Strin
     let mut tracker = UsageTracker::default();
     tracker.refresh(conversation, None).await?;
     Ok(tracker.cost_lines())
-}
-
-pub(crate) fn parse_snapshot_kind(value: &str) -> Result<exoharness::SnapshotKind, String> {
-    match value {
-        "filesystem" => Ok(exoharness::SnapshotKind::Filesystem),
-        "full" => Ok(exoharness::SnapshotKind::Full),
-        _ => Err("snapshot kind must be filesystem or full".into()),
-    }
 }
 
 pub(crate) async fn snapshot_lines(

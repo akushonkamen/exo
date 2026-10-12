@@ -55,9 +55,11 @@ use crate::{
     SandboxTerminalParts, SandboxTerminalSize,
 };
 
+use super::capture_store::{self, allocated_files as snapshot_directory_bytes};
 use super::firecracker_image::resolve_image;
 #[cfg(test)]
 use super::firecracker_image::validate_ext4_image;
+use super::snapshot_lease::SnapshotLease;
 
 #[cfg(target_os = "linux")]
 #[path = "firecracker_lima_storage.rs"]
@@ -664,6 +666,8 @@ impl Drop for MachineCapacityReservation {
     }
 }
 
+type ImageIdentity = (u64, u64, u64, i64, i64);
+
 struct Shared {
     config: FirecrackerConfig,
     host_fingerprint: FirecrackerHostFingerprint,
@@ -678,7 +682,7 @@ struct Shared {
     lifecycle_locks: MachineLifecycleLocks,
     capacity_gate: Mutex<()>,
     starting_machines: Arc<StdMutex<HashSet<String>>>,
-    base_image_digests: StdMutex<HashMap<(u64, u64, u64, i64, i64), String>>,
+    base_image_digests: StdMutex<HashMap<ImageIdentity, String>>,
 }
 
 impl Drop for Shared {
@@ -1285,6 +1289,7 @@ impl FirecrackerSandboxBackend {
                     machine_id.clone(),
                     false,
                     Some(capacity_reservation),
+                    false,
                 )
                 .await
             {
@@ -1336,7 +1341,7 @@ impl FirecrackerSandboxBackend {
             .lifecycle_locks
             .lock_sandbox(request.sandbox_id.as_str())
             .await;
-        self.acquire_resolved_locked(request, spec_hash, machine_id, one_shot, None)
+        self.acquire_resolved_locked(request, spec_hash, machine_id, one_shot, None, false)
             .await
     }
 
@@ -1350,6 +1355,7 @@ impl FirecrackerSandboxBackend {
         target_machine_id: String,
         one_shot: bool,
         capacity_reservation: Option<MachineCapacityReservation>,
+        pre_staged: bool,
     ) -> Result<FirecrackerSandboxHandle> {
         let stable_machine_id = machine_id(request.sandbox_id.as_str(), &spec_hash);
         let machine_key_prefix = format!("fc-{}-", stable_id(request.sandbox_id.as_str()));
@@ -1393,7 +1399,7 @@ impl FirecrackerSandboxBackend {
         };
         let machine = self
             .shared
-            .ensure_machine(&request, &target_machine_id, &spec_hash)
+            .ensure_machine(&request, &target_machine_id, &spec_hash, pre_staged)
             .await?;
         if !one_shot {
             self.shared.touch_machine_lease(&target_machine_id).await?;
@@ -1433,6 +1439,7 @@ impl FirecrackerSandboxBackend {
         let terminate = self.shutdown_request(request.clone(), ShutdownMode::Terminate);
         self.egress
             .acquire(
+                crate::egress::AcquisitionMode::Acquire,
                 request.clone(),
                 self.external_proxy.as_ref(),
                 |policy| async move { self.egress_transport(&policy).await },
@@ -2110,6 +2117,7 @@ impl Shared {
         request: &FirecrackerRequest,
         machine_id: &str,
         spec_hash: &str,
+        pre_staged: bool,
     ) -> Result<Machine> {
         let runtime = self
             .host_fingerprint
@@ -2163,7 +2171,7 @@ impl Shared {
                     .await?
             }
         };
-        let readiness = match self.prepare_and_launch(request, &record).await {
+        let readiness = match self.prepare_and_launch(request, &record, pre_staged).await {
             Ok(readiness) => readiness,
             Err(error) => {
                 if let Err(cleanup_error) = self
@@ -2360,6 +2368,7 @@ impl Shared {
         &self,
         request: &FirecrackerRequest,
         record: &MachineRecord,
+        pre_staged: bool,
     ) -> Result<GuestReadiness> {
         let config = self.config.clone();
         let request = request.clone();
@@ -2378,7 +2387,7 @@ impl Shared {
                         jailer_uid(&config, &record)?,
                     )?;
                 }
-                prepare_and_launch_blocking(&config, &request, &record)
+                prepare_and_launch_blocking(&config, &request, &record, pre_staged)
             })();
             if result.is_err() && record.network_enabled {
                 cleanup_network_blocking(&network);
@@ -4017,6 +4026,7 @@ fn prepare_and_launch_blocking(
     config: &FirecrackerConfig,
     request: &FirecrackerRequest,
     record: &MachineRecord,
+    pre_staged: bool,
 ) -> Result<GuestReadiness> {
     if let Some(template) = record.snapshot_template.as_ref()
         && prepare_snapshot_overlay(config, record, &template.key)?
@@ -4087,7 +4097,8 @@ fn prepare_and_launch_blocking(
             .state_root
             .join("workspaces")
             .join(format!("{workspace_id}.ext4"));
-        if !workspace.try_exists()? {
+        let jailed_workspace = root.join("workspace.ext4");
+        if !pre_staged && !workspace.try_exists()? {
             let file = OpenOptions::new()
                 .create_new(true)
                 .write(true)
@@ -4102,21 +4113,11 @@ fn prepare_and_launch_blocking(
             run_checked("mkfs.ext4", &["-q", "-F", &workspace.to_string_lossy()])?;
             fs::set_permissions(&workspace, Permissions::from_mode(0o600))?;
         }
-        let jailed_workspace = root.join("workspace.ext4");
-        if jailed_workspace.try_exists()? {
-            fs::remove_file(&jailed_workspace)?;
-        }
-        fs::hard_link(&workspace, &jailed_workspace).with_context(|| {
-            format!(
-                "linking Firecracker workspace {} into {}",
-                workspace.display(),
-                jailed_workspace.display()
-            )
-        })?;
+        link_durable_disk(&workspace, &jailed_workspace, pre_staged)?;
         chown(&jailed_workspace, Some(host_uid), Some(host_uid))?;
     }
 
-    prepare_resource_drives(config, request, record, &root)?;
+    prepare_resource_drives(config, request, record, &root, pre_staged)?;
     let vm_config = firecracker_vm_configuration(config, request, record)?;
     let vm_config_path = root.join("vm-config.json");
     fs::write(&vm_config_path, serde_json::to_vec(&vm_config)?)?;
@@ -4130,32 +4131,43 @@ fn prepare_and_launch_blocking(
     Ok(GuestReadiness::Signal(ready_listener))
 }
 
+fn link_durable_disk(source: &Path, target: &Path, pre_staged: bool) -> Result<()> {
+    if pre_staged {
+        ensure!(
+            target.is_file(),
+            "missing staged disk: {}",
+            target.display()
+        );
+        return Ok(());
+    }
+    replace_hard_link(source, target)
+}
+
 fn prepare_resource_drives(
     config: &FirecrackerConfig,
     request: &FirecrackerRequest,
     record: &MachineRecord,
     root: &Path,
+    pre_staged: bool,
 ) -> Result<()> {
     let host_uid = jailer_uid(config, record)?;
     for (index, mount) in request.spec.mounts.iter().enumerate() {
         let source = resource_disk(config, request.scope, &mount.host_path)?;
-        let lock = File::options()
-            .create(true)
-            .truncate(false)
-            .read(true)
-            .write(true)
-            .open(source.with_extension("lock"))?;
-        lock.lock()?;
         let target = root.join(format!("resource-{index}.ext4"));
-        if !target.try_exists()? {
+        let _lock = if pre_staged {
+            None
+        } else {
+            let lock = capture_store::exclusive_lock(&source.with_extension("lock"))?;
+            if target.try_exists()? {
+                fs::remove_file(&target)?;
+            }
             ensure!(
                 fs::metadata(&source)?.nlink() == 1,
                 "resource disk is already attached to another sandbox"
             );
-            fs::hard_link(&source, &target).context(
-                "linking resource disk into Firecracker jail; state and resources must share XFS",
-            )?;
-        }
+            Some(lock)
+        };
+        link_durable_disk(&source, &target, pre_staged)?;
         chown(&target, Some(host_uid), Some(host_uid))?;
         fs::set_permissions(&target, Permissions::from_mode(0o600))?;
     }
@@ -4849,34 +4861,19 @@ fn remove_directory_if_present(path: &Path) -> Result<()> {
     Ok(())
 }
 
-fn snapshot_directory_bytes(directory: &Path, inodes: &mut HashSet<(u64, u64)>) -> Result<u64> {
-    let mut total = 0u64;
-    for entry in fs::read_dir(directory)? {
-        let entry = entry?;
-        let kind = entry.file_type()?;
-        let bytes = if kind.is_dir() {
-            snapshot_directory_bytes(&entry.path(), inodes)?
-        } else if kind.is_file() {
-            let metadata = entry.metadata()?;
-            if inodes.insert((metadata.dev(), metadata.ino())) {
-                metadata
-                    .blocks()
-                    .checked_mul(512)
-                    .context("snapshot size overflow")?
-            } else {
-                0
-            }
-        } else {
-            bail!("unexpected file in Firecracker snapshot storage");
-        };
-        total = total.checked_add(bytes).context("snapshot size overflow")?;
-    }
-    Ok(total)
+fn snapshot_budget_lock(config: &FirecrackerConfig) -> Result<SnapshotLease> {
+    capture_store::exclusive_lock(&config.state_root.join("snapshot-budget.lock"))
 }
 
-fn enforce_snapshot_budget(config: &FirecrackerConfig) -> Result<()> {
-    let mut inodes = HashSet::new();
+fn retained_snapshot_bytes(config: &FirecrackerConfig) -> Result<u64> {
+    let mut inodes = filesystem::shared_base_image_inodes(config)?;
     let mut retained = snapshot_directory_bytes(&config.state_root.join("snapshots"), &mut inodes)?;
+    retained = retained
+        .checked_add(snapshot_directory_bytes(
+            &config.state_root.join("filesystem-snapshots"),
+            &mut inodes,
+        )?)
+        .context("snapshot size overflow")?;
     let machines = match fs::read_dir(jail_dir(config, "")) {
         Ok(machines) => Some(machines),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
@@ -4894,9 +4891,14 @@ fn enforce_snapshot_budget(config: &FirecrackerConfig) -> Result<()> {
                 .context("snapshot size overflow")?;
         }
     }
-    if retained > MAX_SNAPSHOT_BYTES {
-        bail!("Firecracker snapshot storage budget exhausted");
-    }
+    Ok(retained)
+}
+
+fn enforce_snapshot_budget(config: &FirecrackerConfig) -> Result<()> {
+    ensure!(
+        retained_snapshot_bytes(config)? <= MAX_SNAPSHOT_BYTES,
+        "Firecracker snapshot storage budget exhausted; delete unused snapshots"
+    );
     Ok(())
 }
 
@@ -4910,7 +4912,8 @@ fn with_paused_snapshot_source<T>(
     let pid = root.join("firecracker.pid");
     let running = process_running(&pid);
     if running {
-        firecracker_api_patch(&api, "/vm", &FirecrackerVmState { state: "Paused" })?;
+        firecracker_api_patch(&api, "/vm", &FirecrackerVmState { state: "Paused" })
+            .context("pausing Firecracker snapshot source")?;
     }
     let result = capture().and_then(|value| {
         if running && suspend {
@@ -4946,20 +4949,11 @@ fn seal_snapshot_files(directory: &Path, names: &[&str]) -> Result<()> {
     let file = OpenOptions::new()
         .read(true)
         .write(true)
-        .create_new(true)
+        .create(true)
+        .truncate(false)
         .open(&lease)?;
     fs::set_permissions(lease, Permissions::from_mode(0o600))?;
     file.sync_all()?;
-    Ok(())
-}
-
-fn publish_snapshot_directory(temporary: &Path, destination: &Path) -> Result<()> {
-    File::open(temporary)?.sync_all()?;
-    fs::rename(temporary, destination)
-        .with_context(|| format!("publishing Firecracker snapshot {}", destination.display()))?;
-    let parent = destination.parent().context("missing snapshot parent")?;
-    File::open(parent)?.sync_all()?;
-    File::open(parent.parent().context("missing snapshot namespace")?)?.sync_all()?;
     Ok(())
 }
 
@@ -5005,7 +4999,10 @@ fn capture_snapshot_template(
     .and_then(|bytes| bytes.checked_mul(2))
     .and_then(|bytes| bytes.checked_add(disk_bytes))
     .context("computing Firecracker snapshot capture size")?;
-    enforce_snapshot_budget(config)?;
+    {
+        let _budget = snapshot_budget_lock(config)?;
+        enforce_snapshot_budget(config)?;
+    }
     let filesystem = rustix::fs::statvfs(&config.state_root)?;
     let available = filesystem.f_bavail.saturating_mul(filesystem.f_frsize);
     let reserve =
@@ -5092,6 +5089,7 @@ fn capture_snapshot_template(
                 },
                 FIRECRACKER_SNAPSHOT_CREATE_TIMEOUT,
             )
+            .context("creating Firecracker snapshot")
         })?;
         let memory = fs::metadata(output.join("memory"))?;
         tracing::info!(
@@ -5118,7 +5116,6 @@ fn capture_snapshot_template(
             copy_sparse_reflink(&output.join(name), &temporary.join(name))?;
         }
         seal_snapshot_files(&temporary, &["state", "memory", "overlay.ext4"])?;
-        enforce_snapshot_budget(config)?;
         if lifecycle == SnapshotTemplateLifecycle::Machine {
             let marker = temporary.join(SNAPSHOT_FORK_TEMPLATE_FILE);
             File::create(&marker)?.sync_all()?;
@@ -5138,6 +5135,14 @@ fn capture_snapshot_template(
         (Ok(()), Err(error)) => Err(error).context("cleaning up Firecracker snapshot jail output"),
         (Ok(()), Ok(())) => Ok(()),
     };
+    let result = result.and_then(|()| {
+        capture_store::publish(
+            &temporary,
+            &destination,
+            &config.state_root.join("snapshot-budget.lock"),
+            || enforce_snapshot_budget(config),
+        )
+    });
     if let Err(error) = result {
         if let Err(cleanup_error) = remove_directory_if_present(&temporary) {
             return Err(error).context(format!(
@@ -5146,7 +5151,6 @@ fn capture_snapshot_template(
         }
         return Err(error);
     }
-    publish_snapshot_directory(&temporary, &destination)?;
     validate_snapshot_template(
         config,
         &destination,
@@ -5191,7 +5195,7 @@ fn launch_snapshot_clone(
     template_key: &str,
 ) -> Result<GuestReadiness> {
     let root = prepare_snapshot_jail_files(config, request, record)?;
-    prepare_resource_drives(config, request, record, &root)?;
+    prepare_resource_drives(config, request, record, &root, false)?;
     let host_uid = jailer_uid(config, record)?;
     prepare_api_run_dir(&root, host_uid)?;
     let snapshot = root.join("snapshot");

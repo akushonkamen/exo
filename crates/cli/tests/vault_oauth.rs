@@ -350,6 +350,32 @@ async fn vault_refresh_is_coordinated_across_reopened_stores_and_rejects_wrong_d
 }
 
 #[tokio::test]
+async fn oauth_discovery_accepts_401_without_authenticate_header() -> Result<()> {
+    let f = Fixture::new().await?;
+    Mock::given(path("/mcp/"))
+        .respond_with(ResponseTemplate::new(401).set_body_json(json!({"errors": ["Unauthorized"]})))
+        .with_priority(1)
+        .mount(&f.server)
+        .await;
+    let base = f.server.uri();
+    Mock::given(path("/.well-known/oauth-protected-resource/mcp"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "resource": format!("{base}/mcp/"),
+            "authorization_servers": [base],
+            "scopes_supported": ["workspace:read"]
+        })))
+        .mount(&f.server)
+        .await;
+    f.login(false, false).await?;
+    let id = f.secret_id().await?;
+    assert!(matches!(
+        f.vault.get_secret(&id).await?,
+        Some(Secret::Oauth { .. })
+    ));
+    Ok(())
+}
+
+#[tokio::test]
 async fn failed_authorization_preserves_existing_vault_entry() -> Result<()> {
     let f = Fixture::new().await?;
     let id = f
@@ -529,7 +555,7 @@ async fn rejected_tokens_refresh_once_without_reinitializing_the_mcp_session() -
                     && String::from_utf8_lossy(&r.body).contains("\"initialize\"")
             })
             .count();
-        assert_eq!(initializations, 2);
+        assert_eq!(initializations, 1);
         assert!(
             matches!(f.vault.get_secret(&id).await?, Some(Secret::Oauth { refresh_token: Some(refresh), .. }) if refresh == "rotated-refresh")
         );
@@ -737,7 +763,7 @@ async fn chat_vault_smoke_restart_second_vault_rotation_revocation_and_public_mc
     std::fs::write(
         &file,
         format!(
-            "---\nname: Vault smoke\nharness: basic\nconfig:\n  model: gpt-5-mini\n  credential: model\n  base_url: {}\nmcp_servers:\n  - type: url\n    name: workspace\n    url: {}/mcp/\n---\nAnswer workspace questions.\n",
+            "---\nharness: basic\nmodel:\n  name: gpt-5-mini\n  credential: model\n  base_url: {}\nmcp_servers:\n  - type: url\n    name: workspace\n    url: {}/mcp/\n---\nAnswer workspace questions.\n",
             model.uri(),
             f.server.uri(),
         ),
@@ -745,9 +771,9 @@ async fn chat_vault_smoke_restart_second_vault_rotation_revocation_and_public_mc
     f.cli(&[
         "agent",
         "create",
-        "vault-smoke",
-        "--file",
         file.to_str().unwrap(),
+        "--name",
+        "vault-smoke",
     ])
     .await?;
     async fn chat(f: &Fixture, args: &[&str]) -> Result<std::process::Output> {
@@ -782,14 +808,8 @@ async fn chat_vault_smoke_restart_second_vault_rotation_revocation_and_public_mc
             .0
             .to_owned())
     }
-    let first = started(chat(&f, &["agent", "run", "--agent", "vault-smoke"]).await?)?;
-    started(
-        chat(
-            &f,
-            &["agent", "run", "--agent", "vault-smoke", "--thread", &first],
-        )
-        .await?,
-    )?;
+    let first = started(chat(&f, &["run", "vault-smoke"]).await?)?;
+    started(chat(&f, &["run", "vault-smoke", "--thread", &first]).await?)?;
     f.cli(&["vault", "create", "second"]).await?;
     let url = format!("{}/mcp/", f.server.uri());
     let added = f
@@ -812,20 +832,7 @@ async fn chat_vault_smoke_restart_second_vault_rotation_revocation_and_public_mc
         "{}",
         String::from_utf8_lossy(&added.stderr)
     );
-    let second = started(
-        chat(
-            &f,
-            &[
-                "agent",
-                "run",
-                "--agent",
-                "vault-smoke",
-                "--vault",
-                "second",
-            ],
-        )
-        .await?,
-    )?;
+    let second = started(chat(&f, &["run", "vault-smoke", "--vault", "second"]).await?)?;
     let rotated = f
         .command(&[
             "vault",
@@ -840,20 +847,7 @@ async fn chat_vault_smoke_restart_second_vault_rotation_revocation_and_public_mc
         .output()
         .await?;
     assert!(rotated.status.success());
-    started(
-        chat(
-            &f,
-            &[
-                "agent",
-                "run",
-                "--agent",
-                "vault-smoke",
-                "--thread",
-                &second,
-            ],
-        )
-        .await?,
-    )?;
+    started(chat(&f, &["run", "vault-smoke", "--thread", &second]).await?)?;
     #[derive(Deserialize)]
     struct RpcMethod {
         method: String,
@@ -886,27 +880,10 @@ async fn chat_vault_smoke_restart_second_vault_rotation_revocation_and_public_mc
     );
     f.cli(&["vault", "secret", "delete", "second", "workspace"])
         .await?;
-    let revoked = chat(
-        &f,
-        &[
-            "agent",
-            "run",
-            "--agent",
-            "vault-smoke",
-            "--thread",
-            &second,
-        ],
-    )
-    .await?;
+    let revoked = chat(&f, &["run", "vault-smoke", "--thread", &second]).await?;
     assert!(!revoked.status.success());
     assert!(String::from_utf8_lossy(&revoked.stderr).contains("secret is unavailable"));
-    started(
-        chat(
-            &f,
-            &["agent", "run", "--agent", "vault-smoke", "--thread", &first],
-        )
-        .await?,
-    )?;
+    started(chat(&f, &["run", "vault-smoke", "--thread", &first]).await?)?;
     Mock::given(method("POST")).and(path("/public")).respond_with(|request: &wiremock::Request| {
         assert!(request.headers.get("authorization").is_none());
         #[derive(Deserialize)]
@@ -925,13 +902,7 @@ async fn chat_vault_smoke_restart_second_vault_rotation_revocation_and_public_mc
         &public,
         std::fs::read_to_string(&file)?.replace("/mcp/", "/public"),
     )?;
-    started(
-        chat(
-            &f,
-            &["agent", "run", "--agent-file", public.to_str().unwrap()],
-        )
-        .await?,
-    )?;
+    started(chat(&f, &["run", public.to_str().unwrap()]).await?)?;
     f.cli(&["agent", "delete", "vault-smoke"]).await?;
     f.cli(&["vault", "delete", "second"]).await?;
     Ok(())
@@ -1185,14 +1156,14 @@ esac
     std::fs::write(
         &spec,
         format!(
-            "---\nname: GitHub fixture\nharness: basic\nconfig:\n  model: gpt-5-mini\nmcp_servers:\n  - type: url\n    name: github\n    url: {url}\n---\nTest GitHub credentials.\n"
+            "---\nharness: basic\nmodel:\n  name: gpt-5-mini\nmcp_servers:\n  - type: url\n    name: github\n    url: {url}\n---\nTest GitHub credentials.\n"
         ),
     )?;
     let script = std::fs::read_to_string(&executable)?
         .replace(r#""login":"fixture-user""#, r#""login":"other-user""#);
     std::fs::write(&executable, script)?;
     let chat = || {
-        let mut command = f.command(&["agent", "run", "--agent-file", spec.to_str().unwrap()]);
+        let mut command = f.command(&["run", spec.to_str().unwrap()]);
         command.env("PATH", f.temp.path()).stdin(Stdio::null());
         command
     };

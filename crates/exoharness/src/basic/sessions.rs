@@ -94,7 +94,7 @@ impl LocalSessions {
         };
         let lock = self.open(agent, &name)?;
         lock.try_lock().with_context(|| match scope {
-            ResourceScope::Thread { thread_id, .. } => format!("thread {thread_id} is owned by another local process; use its HTTP provider if it is served by exo serve"),
+            ResourceScope::Thread { thread_id, .. } => format!("thread {thread_id} is owned by another local process; use its HTTP provider if it is served by exo run --serve"),
             _ => format!("agent {agent} sandboxes are owned by another local process"),
         })?;
         Ok(Arc::new(SessionLease {
@@ -336,6 +336,14 @@ mod tests {
         ) -> Result<Arc<dyn ManagedSandboxHandle>> {
             self.acquire(request).await
         }
+        async fn suspend(
+            &self,
+            _request: SandboxRequest,
+            _kind: crate::SnapshotKind,
+        ) -> Result<SnapshotPayload> {
+            anyhow::bail!("test recovery backend does not support suspension")
+        }
+
         async fn acquire_from_snapshot(
             &self,
             _request: SandboxRequest,

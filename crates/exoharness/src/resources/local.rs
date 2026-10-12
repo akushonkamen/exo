@@ -10,7 +10,7 @@ use anyhow::{Context, Result, bail, ensure};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-use super::{GitCheckout, GitCredential, PreparedResource, ResourceDefinition, ResourceSource};
+use super::{GitCredential, PreparedResource, ResourceDefinition, ResourceSource};
 use crate::local_volume::{clone_volume, create_volume, mount_volume, unmount_volume};
 use crate::{AgentId, FileSystemMount, ResourceScope, ThreadId};
 
@@ -21,6 +21,7 @@ pub struct ResourceStore {
     master_key: Option<PathBuf>,
     image_size_gib: Option<u64>,
     volume_size_gib: Option<u64>,
+    cancel: Option<tokio_util::sync::CancellationToken>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -39,7 +40,21 @@ impl ResourceStore {
             master_key: None,
             image_size_gib: None,
             volume_size_gib: None,
+            cancel: None,
         })
+    }
+
+    pub(crate) fn with_cancellation(mut self, cancel: tokio_util::sync::CancellationToken) -> Self {
+        self.cancel = Some(cancel);
+        self
+    }
+
+    fn git<I, S>(&self, cwd: &Path, args: I, credential: Option<&GitCredential>) -> Result<String>
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<OsStr>,
+    {
+        git_with_cancellation(cwd, args, credential, self.cancel.as_ref(), None)
     }
 
     pub fn with_volume_size(mut self, size_gib: u64) -> Result<Self> {
@@ -189,7 +204,7 @@ impl ResourceStore {
                 };
                 Ok(FileSystemMount {
                     host_path: path.to_string_lossy().into_owned(),
-                    mount_path: definition.mount_path.clone(),
+                    mount_path: definition.mount_path().into_owned(),
                     mode: definition.mode,
                     internal: Some(true),
                 })
@@ -228,16 +243,19 @@ impl ResourceStore {
             let definition = resource.definition;
             if !matches!(definition.source, ResourceSource::GitRepository { .. })
                 || !mounts.iter().any(|mount| {
-                    mount.internal == Some(true) && mount.mount_path == definition.mount_path
+                    mount.internal == Some(true) && mount.mount_path == definition.mount_path()
                 })
             {
                 continue;
             }
             ensure!(
-                !Path::new(&definition.mount_path).ends_with("*"),
+                !Path::new(definition.mount_path().as_ref()).ends_with("*"),
                 "Git resource mount_path cannot end with '/*': Git treats it as a trust wildcard"
             );
-            let mut settings = vec![("safe.directory".to_owned(), definition.mount_path.clone())];
+            let mut settings = vec![(
+                "safe.directory".to_owned(),
+                definition.mount_path().into_owned(),
+            )];
             if let ResourceSource::GitRepository {
                 url: Some(url),
                 credential: Some(_),
@@ -309,7 +327,20 @@ impl ResourceStore {
             .read(true)
             .write(true)
             .open(locks.join(name))?;
-        file.lock()?;
+        if let Some(cancel) = &self.cancel {
+            loop {
+                ensure!(!cancel.is_cancelled(), "resource preparation canceled");
+                match file.try_lock() {
+                    Ok(()) => break,
+                    Err(std::fs::TryLockError::WouldBlock) => {
+                        std::thread::sleep(std::time::Duration::from_millis(20));
+                    }
+                    Err(error) => return Err(error.into()),
+                }
+            }
+        } else {
+            file.lock()?;
+        }
         Ok(file)
     }
 
@@ -375,6 +406,68 @@ impl ResourceStore {
         Ok(())
     }
 
+    fn resolve_checkout(
+        &self,
+        workspace: &Path,
+        checkout: Option<&str>,
+        credential: Option<&GitCredential>,
+    ) -> Result<(Option<String>, String)> {
+        let branch = match checkout {
+            Some(reference) => {
+                let remote_ref = format!("refs/remotes/origin/{reference}");
+                let branches = self.git(
+                    workspace,
+                    [
+                        "for-each-ref",
+                        "--format=%(refname)",
+                        "refs/remotes/origin/",
+                    ],
+                    None,
+                )?;
+                branches
+                    .lines()
+                    .any(|branch| branch == remote_ref)
+                    .then(|| reference.to_owned())
+            }
+            None => {
+                let refs = self.git(
+                    workspace,
+                    ["ls-remote", "--symref", "origin", "HEAD"],
+                    credential,
+                )?;
+                Some(
+                    refs.lines()
+                        .find_map(|line| {
+                            line.strip_prefix("ref: refs/heads/")?
+                                .strip_suffix("\tHEAD")
+                        })
+                        .context("Git remote has no default branch")?
+                        .to_owned(),
+                )
+            }
+        };
+        let reference = match (&branch, checkout) {
+            (Some(name), _) => format!("refs/remotes/origin/{name}"),
+            (_, Some(reference))
+                if matches!(reference.len(), 40 | 64)
+                    && reference.bytes().all(|c| c.is_ascii_hexdigit()) =>
+            {
+                reference.to_owned()
+            }
+            (_, Some(tag)) => format!("refs/tags/{tag}"),
+            _ => unreachable!(),
+        };
+        let revision = self
+            .git(
+                workspace,
+                ["rev-parse", "--verify", &format!("{reference}^{{commit}}")],
+                None,
+            )?
+            .trim()
+            .to_owned();
+        Ok((branch, revision))
+    }
+
     fn clone_git_resource(
         &self,
         definition: &ResourceDefinition,
@@ -389,6 +482,10 @@ impl ResourceStore {
         else {
             bail!("local resource has no prepared snapshot");
         };
+        let parsed_url = url::Url::parse(url)?;
+        let repository = parsed_url[url::Position::BeforeHost..url::Position::AfterPath]
+            .trim_end_matches('/')
+            .trim_end_matches(".git");
         let key = digest(&serde_json::to_vec(&(
             url,
             checkout,
@@ -403,18 +500,19 @@ impl ResourceStore {
             self.create_volume(staging.path())?;
             fs::rename(staging.path(), &cache)?;
         }
-        tracing::info!(target: "exoharness::progress", "Mounting Git cache for {}", definition.name);
+        tracing::info!(target: "exoharness::progress", "Mounting Git cache for {}", repository);
         let workspace = self.mount_volume(&cache)?;
         let updated = (|| {
             if !workspace.join(".git").exists() {
-                git(&workspace, ["init"], None)?;
-                git(&workspace, ["remote", "add", "origin", url], None)?;
+                self.git(&workspace, ["init"], None)?;
+                self.git(&workspace, ["remote", "add", "origin", url], None)?;
             }
-            tracing::info!(target: "exoharness::progress", "Fetching Git resource {}", definition.name);
-            git(
+            tracing::info!(target: "exoharness::progress", "Fetching Git resource {}", repository);
+            git_with_cancellation(
                 &workspace,
                 [
                     "fetch",
+                    "--progress",
                     "--prune",
                     "--no-recurse-submodules",
                     "origin",
@@ -422,51 +520,26 @@ impl ResourceStore {
                     "+refs/tags/*:refs/tags/*",
                 ],
                 credential,
+                self.cancel.as_ref(),
+                Some(repository),
             )?;
-            let branch = match checkout {
-                Some(GitCheckout::Branch { name }) => Some(name.clone()),
-                Some(GitCheckout::Commit { .. }) => None,
-                None => {
-                    let refs = git(
-                        &workspace,
-                        ["ls-remote", "--symref", "origin", "HEAD"],
-                        credential,
-                    )?;
-                    Some(
-                        refs.lines()
-                            .find_map(|line| {
-                                line.strip_prefix("ref: refs/heads/")?
-                                    .strip_suffix("\tHEAD")
-                            })
-                            .context("Git remote has no default branch")?
-                            .to_owned(),
-                    )
-                }
-            };
-            let reference = match (&branch, checkout) {
-                (Some(name), _) => format!("refs/remotes/origin/{name}"),
-                (_, Some(GitCheckout::Commit { sha })) => sha.clone(),
-                _ => unreachable!(),
-            };
-            let revision = git(
-                &workspace,
-                ["rev-parse", "--verify", &format!("{reference}^{{commit}}")],
-                None,
-            )?
-            .trim()
-            .to_owned();
+            let (branch, revision) =
+                self.resolve_checkout(&workspace, checkout.as_deref(), credential)?;
+            tracing::info!(target: "exoharness::progress", "Checking out Git resource {}", repository);
             if let Some(name) = branch {
-                git(
+                git_with_cancellation(
                     &workspace,
-                    ["checkout", "--force", "-B", &name, &revision],
+                    ["checkout", "--progress", "--force", "-B", &name, &revision],
                     None,
+                    self.cancel.as_ref(),
+                    Some(repository),
                 )?;
-                git(
+                self.git(
                     &workspace,
                     ["config", &format!("branch.{name}.remote"), "origin"],
                     None,
                 )?;
-                git(
+                self.git(
                     &workspace,
                     [
                         "config",
@@ -476,20 +549,24 @@ impl ResourceStore {
                     None,
                 )?;
             } else {
-                git(
+                git_with_cancellation(
                     &workspace,
-                    ["checkout", "--force", "--detach", &revision],
+                    ["checkout", "--progress", "--force", "--detach", &revision],
                     None,
+                    self.cancel.as_ref(),
+                    Some(repository),
                 )?;
             }
             Ok::<_, anyhow::Error>(revision)
         })();
         let updated = updated.and_then(|revision| {
+            tracing::info!(target: "exoharness::progress", "Preparing Git workspace for {}", repository);
             self.prepare_ownership(&workspace)?;
             Ok(revision)
         });
         self.unmount_volume(&cache)?;
         let revision = updated?;
+        tracing::info!(target: "exoharness::progress", "Cloning Git workspace for {}", repository);
         self.clone_volume(&cache, target)?;
         Ok((key, Some(revision)))
     }
@@ -691,10 +768,23 @@ where
     I: IntoIterator<Item = S>,
     S: AsRef<OsStr>,
 {
+    git_with_cancellation(cwd, args, credential, None, None)
+}
+
+fn git_with_cancellation<I, S>(
+    cwd: &Path,
+    args: I,
+    credential: Option<&GitCredential>,
+    cancel: Option<&tokio_util::sync::CancellationToken>,
+    progress: Option<&str>,
+) -> Result<String>
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<OsStr>,
+{
     let (mut command, header) = git_command(cwd, credential);
-    let output = command
-        .args(args)
-        .output()
+    command.args(args);
+    let output = command_output(command, cancel, progress)
         .context("running Git for resource preparation")?;
     if !output.status.success() {
         let mut message = String::from_utf8_lossy(&output.stderr).into_owned();
@@ -719,6 +809,91 @@ where
         bail!("preparing Git resource: {}", message.trim());
     }
     Ok(String::from_utf8(output.stdout)?)
+}
+
+fn git_progress(line: &[u8]) -> Option<(&'static str, u8)> {
+    let line = std::str::from_utf8(line).ok()?.trim();
+    let line = line.strip_prefix("remote: ").unwrap_or(line);
+    let (phase, progress) = line.split_once(':')?;
+    let phase = match phase {
+        "Counting objects" => "Counting objects for",
+        "Compressing objects" => "Compressing objects for",
+        "Receiving objects" => "Downloading",
+        "Resolving deltas" => "Resolving deltas for",
+        "Updating files" => "Checking out",
+        _ => return None,
+    };
+    let percent = progress.split_once('%')?.0.trim().parse::<u8>().ok()?;
+    (percent <= 100).then_some((phase, percent))
+}
+
+fn command_output(
+    mut command: Command,
+    cancel: Option<&tokio_util::sync::CancellationToken>,
+    progress: Option<&str>,
+) -> Result<Output> {
+    let Some(cancel) = cancel else {
+        return Ok(command.output()?);
+    };
+    ensure!(!cancel.is_cancelled(), "resource preparation canceled");
+    use std::process::Stdio;
+    use tokio::io::{AsyncBufReadExt, AsyncReadExt, BufReader};
+    command
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        command.process_group(0);
+    }
+    tokio::runtime::Handle::current().block_on(async {
+        let mut child = tokio::process::Command::from(command)
+            .kill_on_drop(true)
+            .spawn()?;
+        #[cfg(unix)]
+        let process_group = child.id().context("resource command process ID")? as i32;
+        let mut stdout = child.stdout.take().context("resource command stdout")?;
+        let mut stderr = BufReader::new(child.stderr.take().context("resource command stderr")?);
+        let mut output = Vec::new();
+        let mut errors = Vec::new();
+        tokio::select! {
+            result = async {
+                let (status, _, _) = tokio::try_join!(
+                    child.wait(),
+                    stdout.read_to_end(&mut output),
+                    async {
+                        let mut record = Vec::new();
+                        // Git rewrites progress lines with carriage returns.
+                        while stderr.read_until(b'\r', &mut record).await? > 0 {
+                            errors.extend_from_slice(&record);
+                            if let Some(resource) = progress {
+                                for line in record.split(|byte| *byte == b'\n' || *byte == b'\r') {
+                                    if let Some((phase, percent)) = git_progress(line) {
+                                        tracing::info!(target: "exoharness::progress", "{phase} {resource}: {percent}%");
+                                    }
+                                }
+                            }
+                            record.clear();
+                        }
+                        Ok::<_, std::io::Error>(())
+                    },
+                )?;
+                Ok(Output { status, stdout: output, stderr: errors })
+            } => result,
+            _ = cancel.cancelled() => {
+                #[cfg(unix)]
+                if unsafe { libc::kill(-process_group, libc::SIGKILL) } != 0 {
+                    let error = std::io::Error::last_os_error();
+                    if error.raw_os_error() != Some(libc::ESRCH) {
+                        return Err(error.into());
+                    }
+                }
+                child.kill().await?;
+                bail!("resource preparation canceled");
+            }
+        }
+    })
 }
 
 fn checked(command: &mut Command) -> Result<Output> {

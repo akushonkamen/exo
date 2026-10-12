@@ -485,6 +485,14 @@ impl ManagedSandboxBackend for CliContainerSandboxBackend {
         )))
     }
 
+    async fn suspend(
+        &self,
+        _request: SandboxRequest,
+        _kind: crate::SnapshotKind,
+    ) -> Result<SnapshotPayload> {
+        bail!("container sandbox backend does not support suspension")
+    }
+
     async fn acquire_from_snapshot(
         &self,
         request: SandboxRequest,
@@ -734,7 +742,11 @@ impl ManagedSandboxHandle for WarmSandboxHandle {
             "container backend does not support full execution snapshots"
         );
         ensure!(
-            self.request.spec.durable_file_systems.is_empty()
+            self.request
+                .spec
+                .durable_file_systems
+                .iter()
+                .all(|filesystem| { filesystem.mode == crate::FileSystemMountMode::ReadOnly })
                 && self
                     .request
                     .spec
@@ -811,6 +823,14 @@ impl ManagedSandboxBackend for LocalProcessSandboxBackend {
         _attachment: SandboxAttachment,
     ) -> Result<Arc<dyn ManagedSandboxHandle>> {
         bail!("local-process sandbox backend does not support attachments")
+    }
+
+    async fn suspend(
+        &self,
+        _request: SandboxRequest,
+        _kind: crate::SnapshotKind,
+    ) -> Result<SnapshotPayload> {
+        bail!("local-process sandbox backend does not support suspension")
     }
 
     async fn acquire_from_snapshot(
@@ -2276,6 +2296,65 @@ mod tests {
             serde_json::to_string(&decoded).unwrap(),
             r#""vendor-format-v3""#
         );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn docker_filesystem_snapshot_allows_only_read_only_durable_filesystems() -> Result<()> {
+        use std::os::unix::fs::PermissionsExt;
+        let temp = tempfile::tempdir()?;
+        let binary = temp.path().join("docker");
+        std::fs::write(
+            &binary,
+            "#!/bin/sh\nif [ \"$1\" = save ]; then printf image-tar; fi\n",
+        )?;
+        std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o755))?;
+        let request = SandboxRequest {
+            sandbox_id: "test".into(),
+            scope: ResourceScope::Global,
+            provider_state: None,
+            spec: SandboxSpec {
+                image: "test".into(),
+                default_workdir: "/workspace".into(),
+                tcp_ports: vec![],
+                mounts: vec![],
+                resources: None,
+                durable_file_systems: vec![crate::DurableFileSystem {
+                    name: "reference".into(),
+                    mount_path: "/reference".into(),
+                    mode: crate::FileSystemMountMode::ReadOnly,
+                }],
+                policy: SandboxNetworkPolicy::Disabled.into(),
+            },
+            lifecycle: Default::default(),
+        };
+        let warm_sandboxes = Arc::new(Mutex::new(HashMap::from([(
+            request.sandbox_id.clone(),
+            WarmSandboxEntry {
+                name: "test".into(),
+                request: request.clone(),
+                last_used_at: Instant::now(),
+                owned: false,
+            },
+        )])));
+        let mut handle = WarmSandboxHandle {
+            id: "test".into(),
+            cli: ContainerCliFlavor::Docker,
+            container_bin: binary,
+            request,
+            warm_sandboxes,
+        };
+        let payload = handle.snapshot(crate::SnapshotKind::Filesystem).await?;
+        assert_eq!(payload.format, SnapshotFormat::DockerImageTar);
+        assert_eq!(payload.bytes.as_ref(), b"image-tar");
+        handle.request.spec.durable_file_systems[0].mode = crate::FileSystemMountMode::ReadWrite;
+        assert!(
+            handle
+                .snapshot(crate::SnapshotKind::Filesystem)
+                .await
+                .is_err()
+        );
+        Ok(())
     }
 
     #[cfg(unix)]
