@@ -36,8 +36,6 @@ pub(super) fn open(
         sandbox_id: sandbox_id.clone(),
         process_id: process_id.clone(),
         finished: false,
-        #[cfg(feature = "basic-backend")]
-        runtime: tokio::runtime::Handle::try_current().ok(),
     };
     let (stdout_tx, stdout_rx) = mpsc::channel(8);
     let (stderr_tx, stderr_rx) = mpsc::channel(8);
@@ -49,12 +47,14 @@ pub(super) fn open(
     let output_harness = harness.clone();
     let output_sandbox = sandbox_id.clone();
     let output_process = process_id.clone();
+    let host_for_polls = host.clone();
     host.spawn(Box::pin(async move {
         let result = poll_events(
             output_harness,
             scope,
             output_sandbox,
             output_process,
+            host_for_polls,
             stdout_tx,
             stderr_tx,
         )
@@ -113,6 +113,7 @@ async fn poll_events(
     scope: ResourceScope,
     sandbox_id: SandboxId,
     process_id: SandboxProcessId,
+    host: Arc<dyn RuntimeHost>,
     mut stdout: mpsc::Sender<Vec<u8>>,
     mut stderr: mpsc::Sender<Vec<u8>>,
 ) -> Result<i32> {
@@ -130,7 +131,6 @@ async fn poll_events(
             },
         )
         .await?;
-        #[cfg(feature = "basic-backend")]
         let empty = result.events.is_empty();
         for event in result.events {
             cursor = Some(event.cursor());
@@ -147,9 +147,8 @@ async fn poll_events(
         match result.status {
             SandboxProcessStatus::Running => {
                 // An HTTP transport may return an empty page without long-polling.
-                #[cfg(feature = "basic-backend")]
                 if empty {
-                    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                    host.sleep(std::time::Duration::from_millis(50)).await?;
                 }
             }
             SandboxProcessStatus::Exited { exit_code } => return Ok(exit_code),
@@ -195,8 +194,6 @@ struct CancelProcess {
     sandbox_id: SandboxId,
     process_id: SandboxProcessId,
     finished: bool,
-    #[cfg(feature = "basic-backend")]
-    runtime: Option<tokio::runtime::Handle>,
 }
 impl Drop for CancelProcess {
     fn drop(&mut self) {
@@ -217,12 +214,6 @@ impl Drop for CancelProcess {
                 tracing::warn!(%error, "failed to cancel abandoned HTTP sandbox process");
             }
         });
-        #[cfg(feature = "basic-backend")]
-        if let Some(runtime) = &self.runtime {
-            let _entered = runtime.enter();
-            self.host.spawn(task);
-            return;
-        }
         self.host.spawn(task);
     }
 }

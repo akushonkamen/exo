@@ -16,6 +16,9 @@ use wasm_bindgen::JsValue;
 #[derive(Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub(crate) enum HostRequest {
+    Sleep {
+        millis: u64,
+    },
     Storage {
         operation: StorageOperation,
     },
@@ -35,6 +38,7 @@ pub(crate) enum HostRequest {
     Model {
         request: ModelRequest,
     },
+    ResetHarness,
     Harness {
         payload: TypeScriptInitPayload,
     },
@@ -57,15 +61,6 @@ pub(crate) struct HostCall {
     pub request: HostRequest,
 }
 
-#[derive(Debug)]
-pub(crate) struct HostError(String);
-impl std::fmt::Display for HostError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&self.0)
-    }
-}
-impl std::error::Error for HostError {}
-
 type HostReply = Result<JsValue, String>;
 
 #[derive(Default)]
@@ -76,12 +71,14 @@ pub(crate) struct Host {
     pub tasks: Mutex<Vec<BoxFuture<'static, ()>>>,
     pub awake: AtomicBool,
     pub events: Mutex<Vec<RuntimeEvent>>,
-    // JSON/SSE byte fields are arrays; process I/O uses Uint8Array separately.
-    pub watch_events: Mutex<Vec<(u32, serde_json::Value)>>,
+    pub watches: crate::watch::Watches,
 }
 
 impl Host {
-    pub async fn call<T: DeserializeOwned>(&self, request: HostRequest) -> Result<T> {
+    pub fn call<T: DeserializeOwned + 'static>(
+        &self,
+        request: HostRequest,
+    ) -> BoxFuture<'static, Result<T>> {
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
         let (reply, receiver) = oneshot::channel();
         self.replies
@@ -92,11 +89,13 @@ impl Host {
             .lock()
             .expect("host calls poisoned")
             .push(HostCall { id, request });
-        let reply = receiver
-            .await
-            .context("Worker host stopped before replying")?;
-        let result = reply.map_err(HostError)?;
-        serde_wasm_bindgen::from_value(result).context("decoding Worker host response")
+        Box::pin(async move {
+            let reply = receiver
+                .await
+                .context("Worker host stopped before replying")?;
+            let result = reply.map_err(anyhow::Error::msg)?;
+            serde_wasm_bindgen::from_value(result).context("decoding Worker host response")
+        })
     }
 
     pub fn resolve(&self, id: u32, reply: HostReply) -> bool {
@@ -132,6 +131,12 @@ impl Host {
 }
 
 impl RuntimeHost for Host {
+    fn sleep(&self, duration: std::time::Duration) -> BoxFuture<'static, Result<()>> {
+        self.call(HostRequest::Sleep {
+            millis: duration.as_millis() as u64,
+        })
+    }
+
     fn spawn(&self, task: BoxFuture<'static, ()>) {
         self.tasks.lock().expect("host tasks poisoned").push(task);
         self.awake.store(true, Ordering::Release);
@@ -159,6 +164,7 @@ pub(crate) enum StorageOperation {
     },
     List {
         prefix: String,
+        after: Option<String>,
     },
     Delete {
         key: String,
@@ -193,11 +199,12 @@ impl exoharness::Storage for HostStorage {
             .await?;
         Ok(bytes.map(serde_bytes::ByteBuf::into_vec))
     }
-    async fn list(&self, prefix: &str) -> Result<Vec<String>> {
+    async fn list_after(&self, prefix: &str, after: Option<&str>) -> Result<Vec<String>> {
         self.0
             .call(HostRequest::Storage {
                 operation: StorageOperation::List {
                     prefix: prefix.into(),
+                    after: after.map(str::to_owned),
                 },
             })
             .await

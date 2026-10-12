@@ -323,7 +323,7 @@ test("unserviceable environment resources fail before starting or saving a sandb
       /Cloudflare cannot satisfy sandbox resources/,
     );
     assert.equal(f.calls.length, 0);
-    assert.equal(await f.storage.get("image"), undefined);
+    assert.equal(await f.storage.get("config"), undefined);
   }
 });
 

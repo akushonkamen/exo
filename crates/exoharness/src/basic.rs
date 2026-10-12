@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::fmt::{self, Display, Formatter};
 use std::ops::Bound;
 use std::path::{Path, PathBuf};
@@ -6,19 +6,20 @@ use std::sync::{Arc, Mutex, Weak};
 
 use anyhow::{Context, anyhow, bail};
 use async_trait::async_trait;
-use futures::stream::{self, BoxStream};
+use futures::stream;
 use futures::{StreamExt, TryStreamExt};
 use serde::{Deserialize, Serialize};
 use tokio::sync::{
     Mutex as AsyncMutex, OwnedRwLockReadGuard, OwnedRwLockWriteGuard, RwLock as AsyncRwLock, mpsc,
 };
-use tokio_stream::wrappers::UnboundedReceiverStream;
 
 use crate::storage::BasicObjectStore;
 
 #[cfg(feature = "basic-backend")]
 #[path = "basic/native.rs"]
 mod native;
+#[cfg(feature = "basic-backend")]
+pub(crate) use native::ProcessRuntimeHost;
 #[cfg(feature = "basic-backend")]
 pub use native::*;
 #[path = "basic/sandboxes.rs"]
@@ -193,7 +194,7 @@ struct BasicExoHarnessInner {
     storage: BasicObjectStore,
     write_lock: AsyncMutex<()>,
     resource_locks: Mutex<HashMap<ResourceScope, Weak<AsyncRwLock<()>>>>,
-    subscribers: Mutex<HashMap<ConversationId, Vec<mpsc::UnboundedSender<Result<Event>>>>>,
+    subscribers: Mutex<HashMap<ConversationId, Vec<mpsc::Sender<()>>>>,
     #[cfg(feature = "basic-backend")]
     native: NativeState,
     sandbox_registry: HashMap<SandboxProvider, SandboxBackendRegistration>,
@@ -1838,18 +1839,16 @@ impl ConversationHandle for BasicConversationHandle {
             })
             .await?;
         let _guard = self.harness.inner.write_lock.lock().await;
-        let existing = match after_exclusive {
-            Bound::Unbounded => Vec::new(),
-            _ => {
-                let events =
-                    load_events(&self.harness.inner.storage, &self.conversation_dir()).await?;
-                events
-                    .into_iter()
-                    .filter(|event| matches_bound(event.id, &after_exclusive))
-                    .collect::<Vec<_>>()
-            }
+        let bound = match after_exclusive {
+            Bound::Unbounded => Bound::Excluded(
+                load_conversation_record(&self.harness.inner.storage, &self.conversation_dir())
+                    .await?
+                    .latest_event_id
+                    .unwrap_or(Uuid7(Default::default())),
+            ),
+            bound => bound,
         };
-        let (tx, rx) = mpsc::unbounded_channel();
+        let (tx, rx) = mpsc::channel(1);
         self.harness
             .inner
             .subscribers
@@ -1858,10 +1857,46 @@ impl ConversationHandle for BasicConversationHandle {
             .entry(self.record.id)
             .or_default()
             .push(tx);
-        let existing_stream: BoxStream<'static, Result<Event>> =
-            stream::iter(existing.into_iter().map(Ok)).boxed();
-        let live_stream = UnboundedReceiverStream::new(rx);
-        Ok(Box::pin(existing_stream.chain(live_stream)))
+        let (keys, last_key) =
+            watch_keys(&self.harness.inner.storage, &self.events_dir(), &bound).await?;
+        let watch = StoredEventWatch {
+            storage: self.harness.inner.storage.clone(),
+            directory: self.events_dir(),
+            keys: keys.into_iter(),
+            events: VecDeque::new(),
+            last_key,
+            bound,
+            rx,
+        };
+        Ok(Box::pin(futures::stream::try_unfold(
+            watch,
+            |mut watch| async move {
+                loop {
+                    if let Some(event) = watch.events.pop_front() {
+                        watch.bound = Bound::Excluded(event.id);
+                        return Ok(Some((event, watch)));
+                    }
+                    if let Some(key) = watch.keys.next() {
+                        let mut events = load_event_object(&watch.storage, &key).await?;
+                        events.retain(|event| matches_bound(event.id, &watch.bound));
+                        events.sort_by_key(|event| event.id);
+                        watch.events = events.into();
+                        continue;
+                    }
+                    if watch.rx.recv().await.is_none() {
+                        return Ok(None);
+                    }
+                    let keys = watch
+                        .storage
+                        .list_keys_after(&watch.directory, watch.last_key.as_deref())
+                        .await?;
+                    if let Some(last) = keys.last() {
+                        watch.last_key = Some(last.clone());
+                    }
+                    watch.keys = keys.into_iter();
+                }
+            },
+        )))
     }
 
     async fn get_event(&self, id: EventId) -> Result<Option<Event>> {
@@ -2435,9 +2470,7 @@ async fn append_events_to_conversation(
         events = batch.events;
     }
     let event_ids = events.iter().map(|event| event.id).collect();
-    for event in events {
-        notify_subscribers(inner, conversation_id, event);
-    }
+    notify_subscribers(inner, conversation_id);
     record.latest_event_id = Some(latest_event_id);
     Ok(AddEventsResult {
         event_ids,
@@ -2505,12 +2538,45 @@ fn format_event_head_timestamp(head: Option<EventId>) -> String {
         .unwrap_or_else(|| "unknown".to_string())
 }
 
-fn notify_subscribers(inner: &BasicExoHarnessInner, conversation_id: ConversationId, event: Event) {
+fn notify_subscribers(inner: &BasicExoHarnessInner, conversation_id: ConversationId) {
     let mut subscribers = inner.subscribers.lock().expect("subscribers poisoned");
     let Some(entries) = subscribers.get_mut(&conversation_id) else {
         return;
     };
-    entries.retain(|sender| sender.send(Ok(event.clone())).is_ok());
+    entries.retain(|sender| match sender.try_send(()) {
+        Ok(()) | Err(mpsc::error::TrySendError::Full(())) => true,
+        Err(mpsc::error::TrySendError::Closed(())) => false,
+    });
+}
+
+// Keep one committed batch and one coalesced wakeup per watcher. The journal,
+// rather than an unbounded channel, retains events while consumers are slow.
+struct StoredEventWatch {
+    storage: BasicObjectStore,
+    directory: PathBuf,
+    keys: std::vec::IntoIter<String>,
+    events: VecDeque<Event>,
+    last_key: Option<String>,
+    bound: Bound<EventId>,
+    rx: mpsc::Receiver<()>,
+}
+async fn watch_keys(
+    storage: &BasicObjectStore,
+    directory: &Path,
+    bound: &Bound<EventId>,
+) -> Result<(Vec<String>, Option<String>)> {
+    let mut keys = storage.list_keys(directory).await?;
+    // The initial scan must include a batch whose range straddles the event
+    // cursor. Subsequent wakeups list only keys appended after this scan.
+    let last_key = keys.last().cloned();
+    keys.retain(|key| {
+        event_batch_range_from_key(key)
+            .map(|(_, last)| last)
+            .or_else(|| event_id_from_key(key))
+            .is_some_and(|last| matches_bound(last, bound))
+    });
+    keys.sort_by_key(|key| event_id_from_key(key));
+    Ok((keys, last_key))
 }
 
 fn matches_bound(event_id: EventId, bound: &Bound<EventId>) -> bool {

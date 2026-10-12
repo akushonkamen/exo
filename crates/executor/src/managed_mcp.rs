@@ -48,6 +48,18 @@ pub async fn connect_mcp(
 }
 
 impl PreparedMcp {
+    pub async fn validate_configuration(&self, agent: &dyn AgentHandle) -> Result<()> {
+        let servers = match managed::load_definition(agent).await? {
+            Some(definition) => definition.resolve_mcp_servers(&()).await?,
+            None => vec![],
+        };
+        anyhow::ensure!(
+            self.servers == servers,
+            "MCP configuration changed; start a new thread"
+        );
+        Ok(())
+    }
+
     pub async fn configure_thread(&self, conversation: &dyn ThreadHandle) -> Result<()> {
         if self.selection_is_new
             && let Some(selection) = &self.selection

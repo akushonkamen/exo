@@ -60,7 +60,6 @@ mod task_host;
 pub(crate) mod test_support;
 pub use task_host::TokioRuntimeHost;
 pub(crate) mod managed_executor;
-pub(crate) mod managed_mcp;
 pub use exoharness::{
     BasicExoHarness, BasicExoHarnessConfig, DEFAULT_SANDBOX_IMAGE, DEFAULT_SANDBOX_MEMORY_MIB,
     DEFAULT_SANDBOX_VCPU_COUNT, ExoHarnessHttpServeOptions, HTTP_EXOHARNESS_TRACING_TARGET,

@@ -19,6 +19,7 @@ pub(crate) enum Operation {
     },
     Http {
         request: crate::http::Request,
+        account_id: String,
     },
     SandboxPolicy {
         request: exoharness::SandboxRequest,
@@ -41,10 +42,11 @@ pub(crate) enum Operation {
     },
     HasPendingTurns,
     DrainQueue,
-    Watch {
-        agent_id: AgentId,
-        thread_id: ThreadId,
-        after: Option<exoharness::EventId>,
+    WatchNext {
+        id: u32,
+    },
+    WatchClose {
+        id: u32,
     },
     WatchState {
         agent_id: AgentId,
@@ -62,6 +64,8 @@ pub(crate) enum Output {
     Policy(std::collections::HashMap<String, String>),
     Headers(crate::policy::ProxyReply),
     Bool(bool),
+    Watch(u32),
+    Frame(Option<String>),
     McpHttp(crate::mcp::HttpResponse),
     Unit(()),
 }
@@ -91,23 +95,26 @@ pub(crate) async fn run(
             execution.emit_stream(thread_id, event)?;
             Ok(Output::Unit(()))
         }
-        Operation::Http { request } => Ok(Output::Http(
-            crate::http::handle(&runtime, &host, &updates, &progress, request).await,
-        )),
-        Operation::Watch {
-            agent_id,
-            thread_id,
-            after,
-        } => {
-            let agent = service.agent(agent_id).await?;
-            let thread = service.thread(agent.as_ref(), thread_id).await?;
-            let events = executor::managed_agents::service::watch_events(
-                thread.as_ref(),
-                progress.subscribe(),
-                after,
+        Operation::Http {
+            request,
+            account_id,
+        } => Ok(Output::Http(
+            crate::http::handle(
+                &runtime,
+                &host,
+                &updates,
+                &progress,
+                request,
+                &account_id,
+                id,
             )
-            .await?;
-            forward_watch(&host, id, events).await?;
+            .await,
+        )),
+        Operation::WatchNext { id } => {
+            Ok(Output::Frame(host.watches.next(host.as_ref(), id).await?))
+        }
+        Operation::WatchClose { id } => {
+            host.watches.close(id);
             Ok(Output::Unit(()))
         }
         Operation::WatchState {
@@ -117,15 +124,15 @@ pub(crate) async fn run(
         } => {
             let agent = service.agent(agent_id).await?;
             let thread = service.thread(agent.as_ref(), thread_id).await?;
-            forward_watch(&host, id, thread.watch_events(after).await?).await?;
-            Ok(Output::Unit(()))
+            Ok(Output::Watch(host.watches.open(
+                id,
+                thread.watch_events(after).await?,
+                false,
+            )))
         }
-        Operation::SandboxPolicy { request } => {
-            let _guard = updates.lock().await;
-            Ok(Output::Policy(
-                crate::policy::environment(&runtime, &host, request).await?,
-            ))
-        }
+        Operation::SandboxPolicy { request } => Ok(Output::Policy(
+            crate::policy::environment(&runtime, &host, request).await?,
+        )),
         Operation::ProxyHeaders {
             agent_id,
             thread_id,
@@ -150,10 +157,10 @@ pub(crate) async fn run(
             Ok(Output::Headers(match result {
                 Ok(headers) => crate::policy::ProxyReply::Allowed(headers),
                 Err(error) => crate::policy::ProxyReply::Error {
-                    status: if error.is::<crate::host::HostError>() {
-                        500
-                    } else {
+                    status: if error.is::<exoharness::egress_credentials::EgressDenied>() {
                         403
+                    } else {
+                        500
                     },
                     error: format!("{error:#}"),
                 },
@@ -173,15 +180,4 @@ pub(crate) async fn run(
             Ok(Output::Unit(()))
         }
     }
-}
-
-async fn forward_watch(host: &Host, id: u32, mut events: exoharness::EventStream) -> Result<()> {
-    use futures::StreamExt;
-    while let Some(event) = events.next().await {
-        host.watch_events
-            .lock()
-            .expect("Worker watches poisoned")
-            .push((id, serde_json::to_value(event?)?));
-    }
-    Ok(())
 }

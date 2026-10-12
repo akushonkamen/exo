@@ -11,7 +11,6 @@ pub(crate) async fn materialize(
     config: &ConversationConfig,
     progress: &(dyn Fn(String) + Send + Sync),
 ) -> Result<()> {
-    exoharness::resources::validate_sandbox_resources(&config.resources)?;
     let id = crate::conversation_sandbox::ensure_conversation_sandbox(thread, agent, config, None)
         .await?;
     let _activity = thread.sandbox_activity(id.clone()).await?;
@@ -134,12 +133,10 @@ trap 'rm -rf "$staging"' EXIT
         .filter(|_| commit.is_none())
         .map(|reference| format!(" --branch {}", quote(reference)))
         .unwrap_or_default();
-    script.push_str(&format!(
-        "git{auth} clone --progress --depth=1 --single-branch --no-tags --no-recurse-submodules{branch} -- {} \"$staging/repo\"\n",
-        quote(url)
-    ));
     if let Some(sha) = commit {
-        script.push_str(&format!("git{auth} -C \"$staging/repo\" fetch --depth=1 origin {}\ngit -C \"$staging/repo\" checkout --detach {}\n", quote(sha), quote(sha)));
+        script.push_str(&format!("git init \"$staging/repo\"\ngit -C \"$staging/repo\" remote add origin {}\ngit{auth} -C \"$staging/repo\" fetch --progress --depth=1 --no-tags --no-recurse-submodules origin {}\ngit -C \"$staging/repo\" checkout --detach FETCH_HEAD\n", quote(url), quote(sha)));
+    } else {
+        script.push_str(&format!("git{auth} clone --progress --depth=1 --single-branch --no-tags --no-recurse-submodules{branch} -- {} \"$staging/repo\"\n", quote(url)));
     }
     if credential.is_some() {
         script.push_str(&format!(
@@ -258,7 +255,10 @@ mod tests {
             cloned_git(&["rev-parse", "--is-shallow-repository"])?,
             "true"
         );
-        assert_eq!(cloned_git(&["rev-list", "--count", "origin/main"])?, "1");
+        assert_eq!(
+            cloned_git(&["remote", "get-url", "origin"])?,
+            "https://git.example/repo"
+        );
         assert_eq!(cloned_git(&["rev-list", "--count", "HEAD"])?, "1");
         fs::write(&readme, "agent changes")?;
         assert!(run(&resource)?.status.success());

@@ -9,6 +9,7 @@ mod operations;
 mod policy;
 mod sandbox;
 mod turn_queue;
+mod watch;
 
 use std::collections::HashMap;
 use std::sync::atomic::Ordering;
@@ -38,7 +39,6 @@ struct Progress {
     completed: Vec<Completion>,
     pending: bool,
     events: Vec<executor::typescript_runtime::RuntimeEvent>,
-    watch_events: Vec<(u32, serde_json::Value)>,
 }
 
 /// Runs the existing LocalProvider inside a Worker. JavaScript supplies I/O;
@@ -111,7 +111,7 @@ impl WorkerRuntime {
             host: host.clone(),
             state: state.clone(),
             sandbox_default,
-            harnesses: Mutex::default(),
+            harnesses: Default::default(),
             mcp: Arc::new(mcp::WorkerMcp::new(host.clone())),
             coordinator: coordinator.clone(),
             thread,
@@ -184,6 +184,9 @@ impl WorkerRuntime {
     }
 
     pub fn cancel(&self, id: u32) {
+        // Opening may have finished before JS receives its completion.
+        // Cancel the owned watch as well as the in-flight operation.
+        self.host.watches.close(id);
         if let Some(handle) = self.cancellations.get(&id) {
             handle.abort();
         }
@@ -227,13 +230,6 @@ impl WorkerRuntime {
             completed,
             pending: !self.running.is_empty(),
             events: std::mem::take(&mut *self.host.events.lock().expect("Worker events poisoned")),
-            watch_events: std::mem::take(
-                &mut *self
-                    .host
-                    .watch_events
-                    .lock()
-                    .expect("Worker watches poisoned"),
-            ),
         }
         .serialize(
             &serde_wasm_bindgen::Serializer::json_compatible().serialize_bytes_as_arrays(false),

@@ -9,10 +9,10 @@
     "dev": "wrangler dev",
     "deploy": "pnpm run build:runtime && wrangler deploy",
     "test": "pnpm run build && node --test test/*.mjs",
-    "test:live": "node scripts/live-test.mjs",
-    "test:live:codex": "node scripts/live-codex-test.mjs",
+    "test:live": "node scripts/live.mjs basic",
+    "test:live:codex": "node scripts/live.mjs codex",
     "build:runtime": "node scripts/build-runtime.mjs",
-    "test:live:contracts": "node scripts/live-contract-test.mjs"
+    "test:live:contracts": "node scripts/live.mjs contracts"
   },
   "dependencies": {
     "@modelcontextprotocol/client": "2.3.1"

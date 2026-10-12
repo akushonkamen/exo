@@ -4,7 +4,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::task::{Context as TaskContext, Poll};
 
-use anyhow::{Result, bail, ensure};
+use anyhow::{Context, Result, bail, ensure};
 use async_trait::async_trait;
 use executor::runtime_host::RuntimeHost;
 use exoharness::{
@@ -153,7 +153,7 @@ impl ManagedSandboxBackend for CloudflareBackend {
         Ok(previous
             .is_running()
             .await?
-            .unwrap_or(false)
+            .context("Cloudflare sandbox did not report its running state")?
             .then(|| previous.clone()))
     }
     async fn attach(

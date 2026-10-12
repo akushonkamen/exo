@@ -1,4 +1,5 @@
 pub(crate) mod config;
+pub mod http;
 pub mod service;
 #[cfg(feature = "native")]
 pub use crate::native::config::agent_config;
@@ -178,9 +179,7 @@ impl AgentBackend for LocalProvider {
             config.sandbox_scope = Some(crate::SandboxScope::Conversation);
         }
         if !config.resources.is_empty() {
-            if !exoharness::resources::uses_host_resource_mounts(
-                &config.effective_sandbox_provider(&agent_config),
-            ) {
+            if !config.uses_host_resource_mounts(&agent_config) {
                 exoharness::resources::validate_sandbox_resources(&config.resources)?;
             }
             for resource in &config.resources {
@@ -213,11 +212,7 @@ impl AgentBackend for LocalProvider {
             )
             .await?;
         }
-        if !config.resources.is_empty()
-            && exoharness::resources::uses_host_resource_mounts(
-                &config.effective_sandbox_provider(&agent_config),
-            )
-        {
+        if !config.resources.is_empty() && config.uses_host_resource_mounts(&agent_config) {
             let thread = agent
                 .get_thread(&thread.record().id)
                 .await?

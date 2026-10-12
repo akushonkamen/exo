@@ -168,9 +168,7 @@ impl ConversationConfig {
     ) -> Result<()> {
         if !self.resources.is_empty() {
             progress("Preparing workspace".into());
-            if !exoharness::resources::uses_host_resource_mounts(
-                &self.effective_sandbox_provider(agent_config),
-            ) {
+            if !self.uses_host_resource_mounts(agent_config) {
                 return crate::sandbox_resources::materialize(thread, agent_config, self, progress)
                     .await;
             }
@@ -182,6 +180,10 @@ impl ConversationConfig {
                 .await?;
         }
         Ok(())
+    }
+
+    pub(crate) fn uses_host_resource_mounts(&self, config: &AgentConfig) -> bool {
+        exoharness::resources::uses_host_resource_mounts(&self.effective_sandbox_provider(config))
     }
 
     pub fn effective_sandbox_image<'a>(&'a self, agent_config: &'a AgentConfig) -> Option<&'a str> {

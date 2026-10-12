@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
@@ -118,14 +117,16 @@ pub(crate) struct WorkerExecutor {
     pub state: Arc<dyn exoharness::ExoHarness>,
     pub sandbox_default: SandboxProvider,
     pub thread: bool,
-    pub harnesses: Mutex<HashMap<exoharness::ThreadId, Arc<tokio::sync::OnceCell<WorkerHarness>>>>,
+    pub harnesses: executor::executor_cache::ExecutorCache<WorkerHarness>,
 }
 
 pub(crate) struct WorkerHarness {
+    host: Arc<Host>,
     mcp: executor::managed_mcp::PreparedMcp,
     basic: BasicExecutor<WorkerModel, executor::McpToolRuntime<WorkerTools>>,
     runtime: TypeScriptRuntime,
     turn: Mutex<Option<Arc<WorkerTurn>>>,
+    prepared_sandbox: Mutex<Option<exoharness::SandboxId>>,
 }
 
 struct WorkerTurn {
@@ -162,41 +163,10 @@ impl Drop for ActiveTurn<'_> {
 #[async_trait]
 impl HarnessExecutor for WorkerExecutor {
     async fn reset_thread(&self, thread: exoharness::ThreadId) -> Result<()> {
-        let cell = {
-            let mut harnesses = self.harnesses.lock().expect("Worker harnesses poisoned");
-            if let Some(cell) = harnesses.get(&thread) {
-                ensure!(
-                    Arc::strong_count(cell) == 1,
-                    "thread is busy; wait for its current turn or setup to finish before reconfiguring it"
-                );
-            }
-            harnesses.remove(&thread)
-        };
-        if let Some(cell) = cell
-            && let Some(harness) = cell.get()
-        {
-            let stopped = harness.runtime.shutdown().await;
-            let closed = harness.mcp.tools.close().await;
-            stopped?;
-            closed?;
-        }
-        Ok(())
+        self.harnesses.reset(thread).await
     }
-
     async fn shutdown(&self) -> Result<()> {
-        let threads = self
-            .harnesses
-            .lock()
-            .expect("Worker harnesses poisoned")
-            .keys()
-            .copied()
-            .collect::<Vec<_>>();
-        let results =
-            futures::future::join_all(threads.into_iter().map(|id| self.reset_thread(id))).await;
-        for result in results {
-            result?;
-        }
-        Ok(())
+        self.harnesses.shutdown().await
     }
 
     fn name(&self) -> &'static str {
@@ -249,8 +219,14 @@ impl HarnessExecutor for WorkerExecutor {
         config: &AgentConfig,
         thread_config: &ConversationConfig,
     ) -> Result<()> {
-        self.harness(agent, thread, config, thread_config).await?;
-        ensure_conversation_sandbox(thread, config, thread_config, None).await?;
+        let cell = self.harness(agent, thread, config, thread_config).await?;
+        let sandbox = ensure_conversation_sandbox(thread, config, thread_config, None).await?;
+        *cell
+            .get()
+            .expect("Worker harness initialized")
+            .prepared_sandbox
+            .lock()
+            .expect("Worker preparation poisoned") = Some(sandbox);
         Ok(())
     }
     async fn cancel_turn(
@@ -258,12 +234,7 @@ impl HarnessExecutor for WorkerExecutor {
         thread: &dyn ConversationHandle,
         _config: &AgentConfig,
     ) -> Result<()> {
-        let harness = self
-            .harnesses
-            .lock()
-            .expect("Worker harnesses poisoned")
-            .get(&thread.record().id)
-            .cloned();
+        let harness = self.harnesses.get(thread.record().id);
         if let Some(cell) = harness
             && let Some(harness) = cell.get()
         {
@@ -328,16 +299,10 @@ impl WorkerExecutor {
         thread: &dyn ConversationHandle,
         config: &AgentConfig,
         thread_config: &ConversationConfig,
-    ) -> Result<Arc<tokio::sync::OnceCell<WorkerHarness>>> {
+    ) -> Result<Arc<tokio::sync::OnceCell<executor::executor_cache::Entry<WorkerHarness>>>> {
         let cell = self
             .harnesses
-            .lock()
-            .expect("Worker harnesses poisoned")
-            .entry(thread.record().id)
-            .or_default()
-            .clone();
-        let harness = cell
-            .get_or_try_init(|| async {
+            .get_or_try_init(thread.record().id, config, || async {
                 let mcp =
                     executor::managed_mcp::connect_mcp(agent, thread, self.mcp.as_ref()).await?;
                 mcp.configure_thread(thread).await?;
@@ -367,9 +332,11 @@ impl WorkerExecutor {
                     }),
                 );
                 Ok::<_, anyhow::Error>(WorkerHarness {
+                    host: self.host.clone(),
                     runtime,
                     mcp,
                     turn: Mutex::default(),
+                    prepared_sandbox: Mutex::default(),
                     basic: BasicExecutor::with_pricing(
                         Arc::new(WorkerModel(self.host.clone())),
                         tools,
@@ -378,15 +345,8 @@ impl WorkerExecutor {
                 })
             })
             .await?;
-        let definition = exo_managed_agents::load_definition(agent).await?;
-        let servers = match definition {
-            Some(definition) => definition.resolve_mcp_servers(&()).await?,
-            None => vec![],
-        };
-        ensure!(
-            harness.mcp.servers == servers,
-            "MCP configuration changed; start a new thread"
-        );
+        let harness = cell.get().expect("Worker harness initialized");
+        harness.mcp.validate_configuration(agent).await?;
         // Both harnesses validate the same per-server tool policies.
         harness
             .basic
@@ -400,9 +360,9 @@ impl WorkerExecutor {
         thread: exoharness::ThreadId,
         event: executor::TypeScriptStreamEvent,
     ) -> Result<()> {
-        let harnesses = self.harnesses.lock().expect("Worker harnesses poisoned");
-        let harness = harnesses
-            .get(&thread)
+        let harness = self
+            .harnesses
+            .get(thread)
             .ok_or_else(|| anyhow::anyhow!("TypeScript harness is not active"))?;
         let harness = harness
             .get()
@@ -426,14 +386,11 @@ impl WorkerExecutor {
         thread: exoharness::ThreadId,
         request: RuntimeRequest,
     ) -> Result<RuntimeResponsePayload> {
-        let harness = self
+        let cell = self
             .harnesses
-            .lock()
-            .expect("Worker harnesses poisoned")
-            .get(&thread)
-            .cloned()
+            .get(thread)
             .ok_or_else(|| anyhow::anyhow!("TypeScript harness is not active"))?;
-        let harness = harness
+        let harness = cell
             .get()
             .ok_or_else(|| anyhow::anyhow!("Worker harness is not initialized"))?;
         let turn = harness.turn.lock().expect("Worker turn poisoned").clone();
@@ -455,12 +412,18 @@ impl WorkerExecutor {
         trace: Option<&dyn TurnExecutionTrace>,
         recovering: bool,
     ) -> Result<()> {
+        // Runtime prepares before admitting the turn; reuse that exact setup.
         let cell = self
-            .harness(agent, thread.as_ref(), config, thread_config)
-            .await?;
+            .harnesses
+            .get(thread.record().id)
+            .ok_or_else(|| anyhow::anyhow!("Worker harness was not prepared"))?;
         let harness = cell.get().expect("Worker harness initialized");
-        let sandbox_id =
-            ensure_conversation_sandbox(thread.as_ref(), config, thread_config, None).await?;
+        let sandbox_id = harness
+            .prepared_sandbox
+            .lock()
+            .expect("Worker preparation poisoned")
+            .take()
+            .ok_or_else(|| anyhow::anyhow!("Worker sandbox was not prepared"))?;
         let _activity = thread.sandbox_activity(sandbox_id).await?;
         if config.harness == AgentHarnessKind::Basic {
             if recovering {
@@ -526,5 +489,17 @@ impl WorkerExecutor {
             });
         }
         Ok(())
+    }
+}
+
+#[async_trait]
+impl executor::executor_cache::CachedExecutor for WorkerHarness {
+    async fn shutdown(&self) -> Result<()> {
+        let stopped = self.runtime.shutdown().await;
+        let closed = self.mcp.tools.close().await;
+        let reset = self.host.call::<()>(HostRequest::ResetHarness).await;
+        stopped?;
+        closed?;
+        reset
     }
 }

@@ -524,3 +524,68 @@ impl BasicVaultHandle {
         Ok(resolved)
     }
 }
+
+// Both hosts finish and persist a token rotation after its requester disconnects.
+// Only scheduling, refresh locking, and native GitHub CLI access differ.
+impl BasicVaultHandle {
+    pub(super) async fn resolve_credentials(
+        &self,
+        id: &SecretId,
+        target: &CredentialDestination,
+    ) -> Result<ResolvedSecret> {
+        let resolved = self.read_for_destination(id, target).await?;
+        if !self.platform_needs_refresh(id, &resolved)? {
+            return Ok(resolved);
+        }
+        self.refresh_task(id, target, resolved.revision, false)
+            .await
+    }
+    pub(super) async fn refresh_task(
+        &self,
+        id: &SecretId,
+        target: &CredentialDestination,
+        revision: u64,
+        force: bool,
+    ) -> Result<ResolvedSecret> {
+        let vault = self.clone();
+        let id = *id;
+        let target = target.clone();
+        let (done, completion) = futures::channel::oneshot::channel();
+        self.refresh_host()?.spawn(Box::pin(async move {
+            let result = vault.refresh(&id, &target, revision, force).await;
+            if done.send(result).is_err() {
+                tracing::debug!("OAuth caller stopped before refresh finished");
+            }
+        }));
+        completion
+            .await
+            .context("host stopped before credential refresh finished")?
+    }
+    async fn refresh(
+        &self,
+        id: &SecretId,
+        target: &CredentialDestination,
+        revision: u64,
+        force: bool,
+    ) -> Result<ResolvedSecret> {
+        let _guard = self.refresh_guard(id).await?;
+        let resolved = self.read_for_destination(id, target).await?;
+        if resolved.revision != revision
+            || (!force && !self.platform_needs_refresh(id, &resolved)?)
+        {
+            return Ok(resolved);
+        }
+        let secret = match &resolved.secret {
+            #[cfg(feature = "basic-backend")]
+            Secret::GithubCli { account, .. } => Secret::GithubCli {
+                value: github_cli_token(account).await?,
+                account: account.clone(),
+            },
+            _ => oauth::refresh(resolved.secret.clone(), self.refresh_http()?).await?,
+        };
+        let resolved = self.persist_refreshed(id, target, resolved, secret).await?;
+        #[cfg(feature = "basic-backend")]
+        self.record_refresh(id, &resolved)?;
+        Ok(resolved)
+    }
+}

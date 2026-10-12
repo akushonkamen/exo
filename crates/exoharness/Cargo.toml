@@ -16,6 +16,7 @@ store = [
   "dep:tokio-stream",
   "dep:base64",
   "dep:http",
+  "dep:sha2",
   "tokio/io-util",
 ]
 basic-backend = [

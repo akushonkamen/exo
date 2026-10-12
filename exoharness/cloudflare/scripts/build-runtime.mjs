@@ -23,15 +23,13 @@ run("cargo", [
   "--locked",
   "-p",
   "exo-worker-runtime",
-  "--release",
+  "--profile",
+  "worker",
   "--target",
   "wasm32-unknown-unknown",
 ]);
 run(bindgen, [
-  resolve(
-    root,
-    "target/wasm32-unknown-unknown/release/exo_worker_runtime.wasm",
-  ),
+  resolve(root, "target/wasm32-unknown-unknown/worker/exo_worker_runtime.wasm"),
   "--target",
   "web",
   "--out-dir",

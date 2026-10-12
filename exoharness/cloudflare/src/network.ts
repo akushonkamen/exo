@@ -9,6 +9,12 @@ export interface ProxyHeaders {
 
 export type ProxyReply = ProxyHeaders | { status: number; error: string };
 
+export interface ProxyRequest {
+  url: string;
+  method: string;
+  headers: [string, string][];
+}
+
 export async function proxyEgress(
   identity: SandboxIdentity,
   request: Request,
@@ -16,9 +22,14 @@ export async function proxyEgress(
     | Pick<import("./provider").ExoProvider, "proxyHeaders">
     | Pick<DurableObjectStub<import("./provider").ExoProvider>, "proxyHeaders">,
 ): Promise<Response> {
+  const input: ProxyRequest = {
+    url: request.url,
+    method: request.method,
+    headers: [...request.headers],
+  };
   let policy: ProxyReply;
   try {
-    policy = (await provider.proxyHeaders(identity, request)) as ProxyReply;
+    policy = (await provider.proxyHeaders(identity, input)) as ProxyReply;
   } catch (error) {
     console.error("Exo egress policy lookup failed", String(error));
     return new Response("Exo egress policy lookup failed", { status: 502 });
@@ -29,15 +40,17 @@ export async function proxyEgress(
       status: policy.status,
     });
   }
-  const replay = policy.credentials.length > 0 ? request.clone() : null;
-  const send = (source: Request, headers: [string, string][]) =>
-    fetch(new Request(source, { headers, redirect: "manual" }));
+  // A tee buffers unread uploads while the first request runs. Only retry
+  // bodyless requests; streaming uploads go upstream once without buffering.
+  const retry = policy.credentials.length > 0 && request.body === null;
+  const send = (headers: [string, string][]) =>
+    fetch(new Request(request, { headers, redirect: "manual" }));
   try {
-    let response = await send(request, policy.headers);
-    if (response.status === 401 && replay) {
+    let response = await send(policy.headers);
+    if (response.status === 401 && retry) {
       const fresh = (await provider.proxyHeaders(
         identity,
-        replay,
+        input,
         policy.credentials,
       )) as ProxyReply;
       if ("error" in fresh) {
@@ -49,20 +62,13 @@ export async function proxyEgress(
       }
       if (fresh.refreshed) {
         await response.body?.cancel();
-        response = await send(replay, fresh.headers);
+        response = await send(fresh.headers);
       }
     }
     return response;
   } catch (error) {
     console.error("Exo egress request failed", String(error));
     return new Response("Exo egress request failed", { status: 502 });
-  } finally {
-    if (replay?.body && !replay.bodyUsed)
-      replay.body
-        .cancel()
-        .catch((error) =>
-          console.error("Exo egress replay cleanup failed", String(error)),
-        );
   }
 }
 

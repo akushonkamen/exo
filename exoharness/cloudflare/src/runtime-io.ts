@@ -60,6 +60,7 @@ type HarnessRequest = {
   payload: RawTypeScriptInitPayload;
 };
 export type HostRequest =
+  | { type: "sleep"; millis: number }
   | {
       type: "oauth_http";
       request: {
@@ -85,6 +86,7 @@ export type HostRequest =
       };
     }
   | HarnessRequest
+  | { type: "reset_harness" }
   | {
       type: "account_request";
       request:
@@ -166,6 +168,19 @@ export class RuntimeIO {
 
   async handle(request: HostRequest, signal: AbortSignal): Promise<unknown> {
     switch (request.type) {
+      case "sleep":
+        return new Promise<void>((resolve, reject) => {
+          const abort = () => {
+            clearTimeout(timer);
+            reject(signal.reason);
+          };
+          const timer = setTimeout(() => {
+            signal.removeEventListener("abort", abort);
+            resolve();
+          }, request.millis);
+          signal.addEventListener("abort", abort, { once: true });
+          if (signal.aborted) abort();
+        });
       case "oauth_http": {
         const r = request.request;
         const response = await fetch(r.url, {
@@ -212,11 +227,7 @@ export class RuntimeIO {
       case "subscription": {
         const { subscription, type } = request.command;
         if (type === "read") return subscription.next();
-        try {
-          await subscription.close();
-        } finally {
-          subscription[Symbol.dispose]();
-        }
+        subscription[Symbol.dispose]();
         return null;
       }
       case "storage":
@@ -261,6 +272,9 @@ export class RuntimeIO {
             : null,
         };
       }
+      case "reset_harness":
+        this.codex = undefined;
+        return null;
       case "harness":
         return this.runHarness(request, signal);
     }

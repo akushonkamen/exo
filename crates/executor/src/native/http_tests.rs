@@ -213,6 +213,50 @@ async fn optional_thread_body_accepts_more_than_two_mebibytes() -> Result<()> {
         .send()
         .await?;
     assert!(response.status().is_success(), "{}", response.status());
+    let response = reqwest::Client::new()
+        .post(f.client.endpoint().join("agent")?)
+        .bearer_auth("test-token")
+        .header("content-type", "application/json")
+        .body(format!("{{}}{}", " ".repeat(2 * 1024 * 1024)))
+        .send()
+        .await?;
+    assert_eq!(response.status(), reqwest::StatusCode::PAYLOAD_TOO_LARGE);
+    f.stop().await
+}
+
+#[actix_web::test]
+async fn shared_routes_preserve_native_error_bodies_and_method_handling() -> Result<()> {
+    let f = Fixture::new().await?;
+    let client = reqwest::Client::new();
+    let response = client
+        .get(
+            f.client
+                .endpoint()
+                .join(&format!("agent/{}/artifact", exoharness::Uuid7::now()))?,
+        )
+        .bearer_auth("test-token")
+        .send()
+        .await?;
+    assert_eq!(response.status(), reqwest::StatusCode::NOT_FOUND);
+    assert_eq!(response.text().await?, "agent not found");
+    let response = client
+        .delete(f.client.endpoint().join("identity")?)
+        .bearer_auth("test-token")
+        .send()
+        .await?;
+    assert_eq!(response.status(), reqwest::StatusCode::METHOD_NOT_ALLOWED);
+    let response = client
+        .post(
+            f.client
+                .endpoint()
+                .join(&format!("agent/{}/thread", f.agent_id))?,
+        )
+        .bearer_auth("test-token")
+        .header("content-type", "Application/JSON; charset=utf-8")
+        .body("{}")
+        .send()
+        .await?;
+    assert_eq!(response.status(), reqwest::StatusCode::OK);
     f.stop().await
 }
 

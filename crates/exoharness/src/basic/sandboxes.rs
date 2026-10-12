@@ -1122,8 +1122,8 @@ impl<'a> BasicScopedSandboxHandle<'a> {
         if status.is_running() {
             bail!("sandbox process lost its live connection: {process_id}");
         }
-        Ok(Arc::new(RunningSandboxProcess {
-            event_log: self.process_event_log(),
+        let process = Arc::new(RunningSandboxProcess {
+            event_log: None,
             sandbox_id: sandbox_id.into(),
             process_id: process_id.into(),
             stdin: AsyncMutex::new(None),
@@ -1133,7 +1133,12 @@ impl<'a> BasicScopedSandboxHandle<'a> {
             output_drained: Notify::new(),
             tasks: Mutex::new(None),
             notify: Notify::new(),
-        }))
+        });
+        let mut processes = self.harness.inner.running_processes.lock().await;
+        Ok(processes
+            .entry(process_id.into())
+            .or_insert(process)
+            .clone())
     }
 
     pub(super) fn process_event_log(&self) -> Option<SandboxProcessEventLog> {

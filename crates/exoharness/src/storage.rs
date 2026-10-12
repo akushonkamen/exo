@@ -14,7 +14,11 @@ use crate::Result;
 pub trait Storage: Send + Sync {
     async fn put(&self, key: &str, bytes: Vec<u8>, blob: bool) -> Result<()>;
     async fn get(&self, key: &str) -> Result<Option<Vec<u8>>>;
-    async fn list(&self, prefix: &str) -> Result<Vec<String>>;
+    async fn list(&self, prefix: &str) -> Result<Vec<String>> {
+        self.list_after(prefix, None).await
+    }
+    /// List keys strictly after a previously listed key, in lexical order.
+    async fn list_after(&self, prefix: &str, after: Option<&str>) -> Result<Vec<String>>;
     async fn list_directories(&self, prefix: &str) -> Result<Vec<String>> {
         let base = if prefix.is_empty() {
             String::new()
@@ -128,7 +132,18 @@ impl BasicObjectStore {
     }
 
     pub(crate) async fn list_keys(&self, prefix: impl AsRef<Path>) -> Result<Vec<String>> {
-        let mut keys = self.store.list(&normalize_path(prefix.as_ref())).await?;
+        self.list_keys_after(prefix, None).await
+    }
+
+    pub(crate) async fn list_keys_after(
+        &self,
+        prefix: impl AsRef<Path>,
+        after: Option<&str>,
+    ) -> Result<Vec<String>> {
+        let mut keys = self
+            .store
+            .list_after(&normalize_path(prefix.as_ref()), after)
+            .await?;
         keys.sort();
         Ok(keys)
     }

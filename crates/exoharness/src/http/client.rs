@@ -3,6 +3,7 @@ use std::sync::Arc;
 #[cfg(feature = "http-client")]
 use std::sync::atomic::{AtomicU64, Ordering};
 
+#[cfg(feature = "basic-backend")]
 use anyhow::Context;
 #[cfg(feature = "http-client")]
 use anyhow::anyhow;
@@ -86,9 +87,6 @@ impl HttpExoHarness {
     pub fn from_transport(transport: Arc<dyn ExoHttpTransport>) -> Self {
         Self {
             transport,
-            #[cfg(feature = "basic-backend")]
-            host: Some(Arc::new(crate::TokioRuntimeHost)),
-            #[cfg(not(feature = "basic-backend"))]
             host: None,
         }
     }
@@ -497,10 +495,17 @@ async fn http_run_in_sandbox(
     scope: ResourceScope,
     request: RunInSandboxRequest,
 ) -> Result<Box<dyn SandboxProcess>> {
-    let host = harness
-        .host
-        .as_ref()
-        .context("sandbox process I/O requires a RuntimeHost")?;
+    let host = match &harness.host {
+        Some(host) => host.clone(),
+        #[cfg(feature = "basic-backend")]
+        None => Arc::new(crate::basic::ProcessRuntimeHost(
+            tokio::runtime::Handle::try_current().context(
+                "sandbox process I/O requires a Tokio runtime or an explicit RuntimeHost",
+            )?,
+        )),
+        #[cfg(not(feature = "basic-backend"))]
+        None => anyhow::bail!("sandbox process I/O requires a RuntimeHost"),
+    };
     let sandbox_id = request.id;
     let process = http_start_sandbox_process(
         harness,

@@ -8,6 +8,7 @@ mod basic;
 pub mod contract_tests;
 pub mod conversation_sandbox;
 pub mod execution_tracing;
+pub mod executor_cache;
 mod executor_types;
 mod frontend_tools;
 pub use exoharness::harness;

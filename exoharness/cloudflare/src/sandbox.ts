@@ -136,6 +136,15 @@ export class CloudflareSandbox {
   }
 }
 
+interface SandboxConfig {
+  identity: SandboxIdentity;
+  image: string;
+  cwd: string;
+  environment: Record<string, string>;
+  idleMs: number;
+  instance: ContainerStartupOptions["instance"];
+}
+
 export class ExoSandbox extends DurableObject<Env> {
   private starting?: Promise<Container>;
   private stopping?: Promise<void>;
@@ -182,16 +191,20 @@ export class ExoSandbox extends DurableObject<Env> {
     this.activeExecs++;
     try {
       await this.stopping;
+      await this.savedConfig(identity);
       if (snapshot) {
         await this.stop();
         await this.ctx.storage.put("snapshot", snapshot);
       }
       this.idleMs = idleMs;
-      await this.ctx.storage.put("idleMs", idleMs);
-      await this.ctx.storage.put("cwd", cwd);
-      await this.ctx.storage.put("environment", environment);
-      await this.ctx.storage.put("image", reference);
-      await this.ctx.storage.put("instance", instance ?? null);
+      await this.ctx.storage.put("config", {
+        identity,
+        image: reference,
+        cwd,
+        environment,
+        idleMs,
+        instance: instance ?? this.env.SANDBOX_INSTANCE ?? "lite",
+      } satisfies SandboxConfig);
       await this.readyContainer(identity);
       return name;
     } finally {
@@ -203,15 +216,22 @@ export class ExoSandbox extends DurableObject<Env> {
   async info(
     identity: SandboxIdentity,
   ): Promise<{ exists: boolean; running: boolean }> {
-    const saved = await this.ctx.storage.get<SandboxIdentity>("identity");
+    const saved = await this.savedConfig(identity);
+    return { exists: !!saved, running: this.ctx.container?.running ?? false };
+  }
+
+  private async savedConfig(
+    identity: SandboxIdentity,
+  ): Promise<SandboxConfig | undefined> {
+    const saved = await this.ctx.storage.get<SandboxConfig>("config");
     if (
       saved &&
-      (saved.agentId !== identity.agentId ||
-        saved.threadId !== identity.threadId ||
-        saved.sandboxId !== identity.sandboxId)
+      (saved.identity.agentId !== identity.agentId ||
+        saved.identity.threadId !== identity.threadId ||
+        saved.identity.sandboxId !== identity.sandboxId)
     )
       throw new Error("sandbox identity mismatch");
-    return { exists: !!saved, running: this.ctx.container?.running ?? false };
+    return saved;
   }
 
   async terminate(identity: SandboxIdentity): Promise<void> {
@@ -248,6 +268,7 @@ export class ExoSandbox extends DurableObject<Env> {
     await this.ctx.storage.setAlarm(Date.now() + this.idleMs);
     // The alarm checkpoints before the platform's inactivity shutdown.
     // Active turns postpone the alarm; the Rust runtime owns cancellation.
+    // End of activity must shorten the active-turn timeout set by start().
     await this.ctx.container.setInactivityTimeout(this.idleMs + 60_000);
   }
 
@@ -263,17 +284,9 @@ export class ExoSandbox extends DurableObject<Env> {
   }
 
   private async start(identity: SandboxIdentity): Promise<Container> {
-    this.idleMs =
-      (await this.ctx.storage.get<number>("idleMs")) ?? idleTimeoutMs;
-    const saved = await this.ctx.storage.get<SandboxIdentity>("identity");
-    if (
-      saved &&
-      (saved.threadId !== identity.threadId ||
-        saved.agentId !== identity.agentId ||
-        saved.sandboxId !== identity.sandboxId)
-    )
-      throw new Error("sandbox identity mismatch");
-    await this.ctx.storage.put("identity", identity);
+    const config = await this.savedConfig(identity);
+    if (!config) throw new Error("sandbox has not been acquired");
+    this.idleMs = config.idleMs;
     const container = this.ctx.container;
     if (!container) throw new Error("native sandbox binding missing");
     if (!container.running) {
@@ -282,25 +295,17 @@ export class ExoSandbox extends DurableObject<Env> {
       await container.interceptOutboundHttps("*", egress);
       const snapshot =
         await this.ctx.storage.get<ContainerSnapshot>("snapshot");
-      const image = await this.ctx.storage.get<string>("image");
-      if (!image) throw new Error("sandbox has not been acquired");
       const options = {
         entrypoint: ["sleep", "infinity"],
         enableInternet: false,
-        instance:
-          (await this.ctx.storage.get<
-            ContainerStartupOptions["instance"] | null
-          >("instance")) ??
-          this.env.SANDBOX_INSTANCE ??
-          "lite",
+        instance: config.instance,
       };
       container.start(
         snapshot
           ? { ...options, containerSnapshot: { id: snapshot.id } }
-          : { ...options, image },
+          : { ...options, image: config.image },
       );
-      const cwd = await this.ctx.storage.get<string>("cwd");
-      const setup = await container.exec(["mkdir", "-p", cwd ?? "/workspace"]);
+      const setup = await container.exec(["mkdir", "-p", config.cwd]);
       const setupOutput = await setup.output();
       if (setupOutput.exitCode !== 0)
         throw new Error(
@@ -349,13 +354,15 @@ export class ExoSandbox extends DurableObject<Env> {
       request.timeoutMs === undefined
         ? undefined
         : setTimeout(() => process.kill(9), request.timeoutMs);
+    if (timer !== undefined) {
+      const clear = () => clearTimeout(timer);
+      // Exit can precede output EOF when descendants inherit the pipes.
+      void process.exitCode.then(clear, clear);
+    }
     // Cloudflare signals only the direct process. Descendants can keep output
     // open after it exits; this timeout does not terminate a process group.
-    const exited = process.exitCode.finally(() => {
-      if (timer !== undefined) clearTimeout(timer);
-    });
     try {
-      const [, output] = await Promise.all([exited, process.output()]);
+      const output = await process.output();
       const decoder = new TextDecoder();
       return {
         stdout: decoder.decode(output.stdout),
@@ -382,15 +389,14 @@ export class ExoSandbox extends DurableObject<Env> {
   }
 
   private async execOptions(request: Pick<ExecRequest, "env" | "cwd">) {
+    const config = await this.ctx.storage.get<SandboxConfig>("config");
+    if (!config) throw new Error("sandbox has not been acquired");
     return {
-      cwd:
-        request.cwd ??
-        (await this.ctx.storage.get<string>("cwd")) ??
-        "/workspace",
+      cwd: request.cwd ?? config.cwd,
       env: {
         HOME: "/home/exo",
         ...request.env,
-        ...(await this.ctx.storage.get<Record<string, string>>("environment")),
+        ...config.environment,
         NODE_EXTRA_CA_CERTS: ca,
         REQUESTS_CA_BUNDLE: ca,
         SSL_CERT_FILE: ca,

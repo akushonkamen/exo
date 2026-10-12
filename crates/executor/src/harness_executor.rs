@@ -141,6 +141,9 @@ pub trait HarnessExecutor: Send + Sync + 'static {
         Ok(())
     }
 
+    /// The runtime calls this once before each execute/resume, with the same
+    /// configuration, under the thread's turn lease. Executors may hand prepared
+    /// state to execution; callers must not invoke execution without preparation.
     async fn prepare_conversation(
         &self,
         _agent: &dyn AgentHandle,
@@ -586,10 +589,14 @@ impl Runtime {
             if thread.caller().is_some() {
                 thread_config.sandbox_scope = Some(crate::SandboxScope::Conversation);
             }
-            if !thread_config.resources.is_empty() {
-                thread_config
-                    .materialize_resources_with_progress(thread.as_ref(), &agent_config, &progress)
-                    .await?;
+        }
+        if !thread_config.resources.is_empty()
+            && (!recovering || !thread_config.uses_host_resource_mounts(&agent_config))
+        {
+            thread_config
+                .materialize_resources_with_progress(thread.as_ref(), &agent_config, &progress)
+                .await?;
+            if !recovering {
                 let mut locations = String::from("Filesystem resources for this thread:\n");
                 for resource in &thread_config.resources {
                     let resource = &resource.definition;
@@ -607,18 +614,6 @@ impl Runtime {
                     .instructions
                     .push(crate::harness_helpers::system_message(&locations));
             }
-        }
-        if recovering
-            && !thread_config.resources.is_empty()
-            && !exoharness::resources::uses_host_resource_mounts(
-                &thread_config.effective_sandbox_provider(&agent_config),
-            )
-        {
-            // Remote preparation may have been interrupted before the harness
-            // started. Its sandbox-local marker makes completion idempotent.
-            thread_config
-                .materialize_resources_with_progress(thread.as_ref(), &agent_config, &progress)
-                .await?;
         }
         #[cfg(feature = "native")]
         if let Some(previews) = self

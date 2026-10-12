@@ -44,10 +44,12 @@ impl TurnQueueStore<TurnWork> for QueueStore {
             .pending
             .front()
             .is_some_and(|head| head.control != TurnControl::Suspend);
-        let bytes = serde_json::to_vec(&Queue {
-            thread,
-            state: state.clone(),
-        })?;
+        #[derive(Serialize)]
+        struct SavedQueue<'a> {
+            thread: TurnThread,
+            state: &'a TurnQueueState<TurnWork>,
+        }
+        let bytes = serde_json::to_vec(&SavedQueue { thread, state })?;
         self.0
             .call::<()>(HostRequest::Storage {
                 operation: StorageOperation::Put {

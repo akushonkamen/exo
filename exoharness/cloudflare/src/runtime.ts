@@ -5,7 +5,6 @@ import type {
   RawExoRequest,
   RawExoResponse,
   RawRuntimeEvent,
-  RawEvent,
 } from "../../typescript/harness/client";
 
 initSync({ module: runtimeWasm });
@@ -24,7 +23,6 @@ interface Progress {
   completed: { id: number; result: unknown; error: string | null }[];
   pending: boolean;
   events: RawRuntimeEvent[];
-  watch_events: [number, RawEvent][];
 }
 
 /** Owns the portable Rust runtime; JavaScript supplies asynchronous host I/O. */
@@ -35,7 +33,6 @@ export class Runtime {
     {
       resolve(value: unknown): void;
       reject(error: Error): void;
-      emit?: (event: RawEvent) => void;
     }
   >();
   private readonly calls = new Map<number, AbortController>();
@@ -49,25 +46,20 @@ export class Runtime {
     ) => Promise<unknown>,
     private readonly waitUntil: (promise: Promise<unknown>) => void,
     private readonly emitRuntimeEvent: (event: RawRuntimeEvent) => void,
-    thread = false,
     private readonly discard: (
       request: HostRequest,
       result: unknown,
     ) => Promise<void>,
+    thread = false,
   ) {
     this.wasm = new WorkerRuntime(masterKey, thread);
   }
 
-  call<T>(
-    operation: unknown,
-    signal?: AbortSignal,
-    emit?: (event: RawEvent) => void,
-  ): Promise<T> {
+  call<T>(operation: unknown, signal?: AbortSignal): Promise<T> {
     signal?.throwIfAborted();
     const id = this.wasm.submit(operation);
     const result = new Promise<T>((resolve, reject) => {
       this.operations.set(id, {
-        emit,
         resolve: (value) => resolve(value as T),
         reject,
       });
@@ -95,11 +87,63 @@ export class Runtime {
     return this.call({ type: "request", request }, signal);
   }
 
+  stream(
+    opening: Promise<number>,
+    signal?: AbortSignal,
+  ): ReadableStream<string> {
+    const abort = new AbortController();
+    let reader: ReadableStreamDefaultController<string> | undefined;
+    const cancel = () => abort.abort(signal?.reason);
+    signal?.addEventListener("abort", cancel, { once: true });
+    let closing: Promise<unknown> | undefined;
+    const close = () => {
+      signal?.removeEventListener("abort", cancel);
+      // Opening failures are reported to the reader and leave no handle to close.
+      return (closing ??= opening.then(
+        (id) => this.call({ type: "watch_close", id }),
+        () => {},
+      ));
+    };
+    abort.signal.addEventListener(
+      "abort",
+      () => {
+        reader?.error(abort.signal.reason);
+        this.waitUntil(close());
+      },
+      {
+        once: true,
+      },
+    );
+    if (signal?.aborted) cancel();
+    return new ReadableStream<string>({
+      start: (controller) => {
+        reader = controller;
+        if (abort.signal.aborted) controller.error(abort.signal.reason);
+      },
+      pull: async (controller) => {
+        try {
+          const id = await opening;
+          abort.signal.throwIfAborted();
+          const frame = await this.call<string | null>(
+            { type: "watch_next", id },
+            abort.signal,
+          );
+          if (frame === null) {
+            controller.close();
+            await close();
+          } else controller.enqueue(frame);
+        } catch (error) {
+          controller.error(error);
+          cancel();
+        }
+      },
+      cancel,
+    });
+  }
+
   private pump(): void {
     const progress = this.wasm.poll() as Progress;
     for (const id of progress.cancelled) this.calls.get(id)?.abort();
-    for (const [id, event] of progress.watch_events)
-      this.operations.get(id)?.emit?.(event);
     for (const completion of progress.completed) {
       const operation = this.operations.get(completion.id);
       if (!operation) continue;
@@ -110,7 +154,7 @@ export class Runtime {
     }
     for (const event of progress.events) this.emitRuntimeEvent(event);
     if (progress.pending && !this.idle) {
-      // Watch is a pending operation for the lifetime of its SSE connection.
+      // A pending watch read keeps the SSE connection's object resident.
       // Keeping the object resident preserves its live progress subscription;
       // disconnecting cancels the watch and releases this waitUntil hold.
       let resolve!: () => void;

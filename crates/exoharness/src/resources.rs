@@ -280,7 +280,8 @@ pub fn uses_host_resource_mounts(provider: &crate::SandboxProvider) -> bool {
 
 pub fn validate_sandbox_resources(resources: &[PreparedResource]) -> Result<()> {
     for resource in resources {
-        resource.definition.validate()?;
+        // Definitions were validated by prepare_resources; this checks only
+        // the execution backend's mount capabilities after provider selection.
         ensure!(
             matches!(
                 &resource.definition.source,

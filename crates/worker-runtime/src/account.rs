@@ -87,7 +87,7 @@ impl ExoHttpTransport for AccountTransport {
             subscription,
         };
         Ok(futures::stream::try_unfold(guard, |guard| async move {
-            let event: Option<Event> = guard
+            let event: Option<String> = guard
                 .host
                 .call(HostRequest::Subscription {
                     command: SubscriptionCommand::Read {
@@ -95,7 +95,9 @@ impl ExoHttpTransport for AccountTransport {
                     },
                 })
                 .await?;
-            Ok(event.map(|event| (event, guard)))
+            Ok(event
+                .map(|event| serde_json::from_str::<Event>(&event).map(|event| (event, guard)))
+                .transpose()?)
         })
         .boxed())
     }
