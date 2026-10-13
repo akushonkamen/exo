@@ -2775,6 +2775,7 @@ dependencies = [
  "lingua",
  "openidconnect",
  "oxide-auth",
+ "percent-encoding",
  "reqwest 0.12.28",
  "rmcp",
  "rsa",
@@ -2902,6 +2903,30 @@ dependencies = [
  "executor",
  "tokio",
  "tracing",
+]
+
+[[package]]
+name = "exo-worker-runtime"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "cost",
+ "executor",
+ "exo-managed-agents",
+ "exo-mcp",
+ "exoharness",
+ "futures",
+ "http 1.4.0",
+ "oauth2",
+ "serde",
+ "serde-wasm-bindgen",
+ "serde_bytes",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "url",
+ "wasm-bindgen",
 ]
 
 [[package]]

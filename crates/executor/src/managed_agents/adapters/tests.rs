@@ -79,6 +79,9 @@ impl Storage for FailingStorage {
     async fn list(&self, prefix: &str) -> Result<Vec<String>> {
         self.inner.list(prefix).await
     }
+    async fn list_after(&self, prefix: &str, after: Option<&str>) -> Result<Vec<String>> {
+        self.inner.list_after(prefix, after).await
+    }
     async fn delete(&self, key: &str) -> Result<()> {
         self.inner.delete(key).await
     }
