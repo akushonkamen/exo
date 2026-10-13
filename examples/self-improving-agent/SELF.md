@@ -122,13 +122,10 @@ called from the model. The old adapter lifecycle events are no longer emitted.
 - In control mode, service guardian builds write `.exo/exo-control.restart`;
   the `./examples/self-improving-agent/exo.sh --control` wrapper restarts only the child `exo run` and
   keeps the user's terminal open.
-- Service restarts drain gracefully: the guardian writes
-  `.exo/exo-adapters.restart` / `.exo/exo-scheduler.restart`, the
-  runner claims the marker, finishes in-flight work, and exits so the guardian
-  can start the new build. Runners that do not claim the marker are killed
-  after a short wait.
-- Adapter restarts also write `.exo/exo-reboot-notice.json`; the fresh
-  adapter runner claims it and wakes the adapter conversations so you can
-  announce externally that you are back. Announce planned downtime with
-  `send_adapter_message` before requesting the restart.
+- The guardian stops the managed adapter runner with SIGTERM and waits for
+  shutdown. Its durable inbox and outbox retain work for recovery. Scheduler
+  restarts use `.exo/exo-scheduler.restart`; the scheduler claims the marker,
+  finishes its current pass, and exits. Services that exceed the shutdown
+  grace period are stopped with their process trees.
+- The managed Slack adapter does not send reboot announcements.
 - Preserve `.exo` state unless the user explicitly asks to delete state.

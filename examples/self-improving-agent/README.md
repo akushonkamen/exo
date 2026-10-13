@@ -1,4 +1,4 @@
-# Exo Harness
+# Self-improving agent example
 
 Exo is a persistent agent built on Exo designed to be helpful wherever
 there is a task to do from a computer. It supports task scheduling, a full

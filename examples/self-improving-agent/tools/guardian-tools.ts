@@ -50,7 +50,7 @@ export function rebuildAndRestartExoTool(): ToolInstance {
     definition: {
       name: "rebuild_and_restart_exo",
       description:
-        "Validate and rebuild Exo, then restart its guardian-managed scheduler and adapter services. This narrow operation is asynchronous: it durably records an update, lets the current turn finish, and returns an update id. Pass reason as a short free-text note describing the change being activated so the update record is self-describing. On completion, the outcome is written to .exo/guardian-updates/<id>.json and recorded in this conversation's event log as rebuild_and_restart_exo (visible via list_conversation_events). The existing guardian reboot notice wakes active adapter conversations after a successful restart.",
+        "Validate and rebuild Exo, then restart its guardian-managed scheduler and adapter services. This narrow operation is asynchronous: it durably records an update, lets the current turn finish, and returns an update id. Pass reason as a short free-text note describing the change being activated so the update record is self-describing. On completion, the outcome is written to .exo/guardian-updates/<id>.json and recorded in this conversation's event log as rebuild_and_restart_exo (visible via list_conversation_events).",
       parameters: {
         type: "object",
         additionalProperties: false,

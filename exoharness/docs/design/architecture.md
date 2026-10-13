@@ -599,6 +599,13 @@ the basic TypeScript harness use shared turn-loop helpers to:
 The Rust model runtime uses Lingua's universal message and tool abstractions and
 routes requests through `braintrust_llm_router`.
 
+## Self-improving agent example
+
+The [self-improving agent](../../../examples/self-improving-agent/README.md)
+composes the TypeScript turn loop with its own tools, prompts, scheduler, and
+guardian scripts. It currently uses the native executor's `ExoToolRuntime` and
+scheduler support. Its implementation lives under `examples/self-improving-agent/`.
+
 ## Managed Adapters
 
 Managed adapters live in `crates/executor/src/managed_agents/adapters/`. Slack

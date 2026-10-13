@@ -30,7 +30,7 @@ info() {
 usage() {
   cat <<'EOF'
 Usage:
-  bash setup.sh [options]
+  bash examples/self-improving-agent/setup.sh [options]
 
 Options:
   --branch <branch>     Git branch to clone for testing (default: main)
@@ -405,7 +405,7 @@ missing_has() {
 is_exo_checkout() {
   local dir="$1"
   # .git is a file (not a directory) in worktrees and submodules.
-  [[ -e "$dir/.git" && -f "$dir/exo.sh" ]]
+  [[ -e "$dir/.git" && -f "$dir/examples/self-improving-agent/exo.sh" ]]
 }
 
 exo_checkout_root() {
