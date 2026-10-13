@@ -762,12 +762,15 @@ impl<'a> BasicScopedSandboxHandle<'a> {
             // Expiring a read leaves the process and its output cursor intact.
             let deadline = deadline
                 .get_or_insert_with(|| self.harness.inner.host.sleep(Duration::from_secs(30)));
-            tokio::select! {
-                _ = notified => {},
-                result = deadline => {
-                    result?;
-                    return Ok(GetSandboxProcessEventsResult { events, cursor, status });
-                }
+            if let futures::future::Either::Right((result, _)) =
+                futures::future::select(notified, deadline).await
+            {
+                result?;
+                return Ok(GetSandboxProcessEventsResult {
+                    events,
+                    cursor,
+                    status,
+                });
             }
         }
     }
