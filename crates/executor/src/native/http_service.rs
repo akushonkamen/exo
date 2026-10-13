@@ -240,20 +240,18 @@ impl dispatch::Platform for RuntimeHttpService {
     }
     async fn previews(
         &self,
-        agent_id: AgentId,
+        agent: &dyn exoharness::AgentHandle,
         thread: Arc<dyn ThreadHandle>,
     ) -> Result<Option<PreviewEndpoint>> {
         let endpoint = self.runtime.active_preview_endpoint();
-        if endpoint.is_some() {
-            let agent = self.shared().agent(agent_id).await?;
-            if self
+        if endpoint.is_some()
+            && self
                 .runtime
-                .register_previews(agent.as_ref(), thread)
+                .register_previews(agent, thread)
                 .await?
                 .is_none()
-            {
-                return Ok(None);
-            }
+        {
+            return Ok(None);
         }
         Ok(endpoint)
     }
@@ -306,7 +304,7 @@ async fn handle(
     } else {
         2 * 1024 * 1024
     };
-    let mut body = web::BytesMut::new();
+    let mut body = Vec::new();
     while let Some(chunk) = payload.next().await {
         let chunk = chunk?;
         if chunk.len() > limit - body.len() {
@@ -346,7 +344,7 @@ async fn handle(
         method: request.method().to_string(),
         path,
         query: request.query_string().into(),
-        body: String::from_utf8(body.to_vec()).map_err(actix_web::error::ErrorBadRequest)?,
+        body: String::from_utf8(body).map_err(actix_web::error::ErrorBadRequest)?,
     };
     match dispatch::handle(
         &service.shared(),

@@ -1,11 +1,7 @@
 import { initSync, WorkerRuntime } from "./wasm/exo_worker_runtime";
 import runtimeWasm from "./wasm/exo_worker_runtime_bg.wasm";
 import type { HostRequest } from "./runtime-io";
-import type {
-  RawExoRequest,
-  RawExoResponse,
-  RawRuntimeEvent,
-} from "../../typescript/harness/client";
+import type { RawRuntimeEvent } from "../../typescript/harness/client";
 
 initSync({ module: runtimeWasm });
 
@@ -78,13 +74,6 @@ export class Runtime {
     return result.finally(() =>
       signal?.removeEventListener("abort", abortResult),
     );
-  }
-
-  async requestExo(
-    request: RawExoRequest,
-    signal?: AbortSignal,
-  ): Promise<RawExoResponse> {
-    return this.call({ type: "request", request }, signal);
   }
 
   stream(

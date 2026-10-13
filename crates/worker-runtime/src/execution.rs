@@ -426,34 +426,23 @@ impl WorkerExecutor {
             .ok_or_else(|| anyhow::anyhow!("Worker sandbox was not prepared"))?;
         let _activity = thread.sandbox_activity(sandbox_id).await?;
         if config.harness == AgentHarnessKind::Basic {
-            if recovering {
-                return harness
-                    .basic
-                    .resume_turn(
-                        agent,
-                        thread,
-                        turn,
-                        config,
-                        thread_config,
-                        request,
-                        stream,
-                        trace,
-                    )
-                    .await;
-            }
-            return harness
-                .basic
-                .execute_turn(
-                    agent,
-                    thread,
-                    turn,
-                    config,
-                    thread_config,
-                    request,
-                    stream,
-                    trace,
-                )
-                .await;
+            let execute = if recovering {
+                BasicExecutor::resume_turn
+            } else {
+                BasicExecutor::execute_turn
+            };
+            return execute(
+                &harness.basic,
+                agent,
+                thread,
+                turn,
+                config,
+                thread_config,
+                request,
+                stream,
+                trace,
+            )
+            .await;
         }
         ensure!(
             config.harness == AgentHarnessKind::TypeScript,

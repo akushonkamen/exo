@@ -1,5 +1,5 @@
 import type { Env } from "./env";
-import { requestPath, staticAuthorization } from "./provider";
+import { requestPath } from "./provider";
 import { threadObjectName } from "./runtime";
 export { ExoProvider, ExoThread } from "./provider";
 export { ExoSandbox } from "./sandbox";
@@ -28,12 +28,16 @@ export default {
         return new Response("Cloudflare Access required", { status: 403 });
       // Access context does not propagate to Durable Objects. Use the trusted
       // binding after verification, never a caller-supplied identity header.
-    } else {
-      const denied = staticAuthorization(env, request);
-      if (denied) return denied;
-    }
+    } else if (
+      !env.EXO_TOKEN ||
+      request.headers.get("authorization") !== `Bearer ${env.EXO_TOKEN}`
+    )
+      return new Response("Unauthorized", {
+        status: 401,
+        headers: { "WWW-Authenticate": 'Bearer realm="exo"' },
+      });
     try {
-      const path = requestPath(request);
+      const path = requestPath(url);
       if (
         path[0] === "agent" &&
         path[2] === "thread" &&

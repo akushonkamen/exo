@@ -47,6 +47,8 @@ pub(crate) struct BasicObjectStore {
     store: Arc<dyn Storage>,
     #[cfg(test)]
     fail_json_put_after: Arc<std::sync::Mutex<Option<usize>>>,
+    #[cfg(test)]
+    reads: Arc<std::sync::atomic::AtomicUsize>,
 }
 
 impl BasicObjectStore {
@@ -55,7 +57,14 @@ impl BasicObjectStore {
             store,
             #[cfg(test)]
             fail_json_put_after: Arc::new(std::sync::Mutex::new(None)),
+            #[cfg(test)]
+            reads: Arc::default(),
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn read_count(&self) -> usize {
+        self.reads.load(std::sync::atomic::Ordering::Relaxed)
     }
 
     #[cfg(test)]
@@ -117,6 +126,9 @@ impl BasicObjectStore {
     }
 
     pub(crate) async fn get_bytes(&self, key: impl AsRef<Path>) -> Result<Vec<u8>> {
+        #[cfg(test)]
+        self.reads
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let key = key.as_ref();
         self.store
             .get(&normalize_path(key))
@@ -128,6 +140,9 @@ impl BasicObjectStore {
         &self,
         key: impl AsRef<Path>,
     ) -> Result<Option<Vec<u8>>> {
+        #[cfg(test)]
+        self.reads
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         self.store.get(&normalize_path(key.as_ref())).await
     }
 
@@ -140,6 +155,9 @@ impl BasicObjectStore {
         prefix: impl AsRef<Path>,
         after: Option<&str>,
     ) -> Result<Vec<String>> {
+        #[cfg(test)]
+        self.reads
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let mut keys = self
             .store
             .list_after(&normalize_path(prefix.as_ref()), after)

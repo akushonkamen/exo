@@ -37,7 +37,7 @@ use crate::{
 const DEFAULT_DURABLE_CONTRACT_MOUNT_PATH: &str = "/home/exo/workspace";
 
 #[tokio::test]
-async fn slow_watch_replays_batch_cursor_and_coalesced_appends_without_loss() -> crate::Result<()> {
+async fn slow_watch_replays_batch_cursor_and_lagged_appends_without_loss() -> crate::Result<()> {
     use futures::StreamExt;
     use std::ops::Bound;
     let harness = BasicExoHarness::in_memory(local_test_config("unused-watch-test")).await?;
@@ -65,9 +65,9 @@ async fn slow_watch_replays_batch_cursor_and_coalesced_appends_without_loss() ->
         .watch_events(Bound::Excluded(first.event_ids[15]))
         .await?;
     let mut expected = first.event_ids[16..].to_vec();
-    // No reads until after multiple appends: the bounded wakeup channel must
-    // coalesce notifications without losing persisted events.
-    for i in 32..64 {
+    // Exceed the live buffer before reading: lagged observers must replay all
+    // persisted events without dropping or duplicating any batch.
+    for i in 32..128 {
         let added = thread
             .add_events(crate::AddEventsRequest {
                 session_id: None,

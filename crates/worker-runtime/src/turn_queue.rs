@@ -13,13 +13,13 @@ use std::sync::Arc;
 
 pub(crate) struct QueueStore(pub Arc<Host>);
 #[derive(Serialize, Deserialize)]
-struct Queue {
+struct Queue<T> {
     thread: TurnThread,
-    state: TurnQueueState<TurnWork>,
+    state: T,
 }
 const KEY: &str = "turn_queue";
 impl QueueStore {
-    async fn get(&self) -> Result<Option<Queue>> {
+    async fn get(&self) -> Result<Option<Queue<TurnQueueState<TurnWork>>>> {
         HostStorage(self.0.clone())
             .get(KEY)
             .await?
@@ -44,12 +44,7 @@ impl TurnQueueStore<TurnWork> for QueueStore {
             .pending
             .front()
             .is_some_and(|head| head.control != TurnControl::Suspend);
-        #[derive(Serialize)]
-        struct SavedQueue<'a> {
-            thread: TurnThread,
-            state: &'a TurnQueueState<TurnWork>,
-        }
-        let bytes = serde_json::to_vec(&SavedQueue { thread, state })?;
+        let bytes = serde_json::to_vec(&Queue { thread, state })?;
         self.0
             .call::<()>(HostRequest::Storage {
                 operation: StorageOperation::Put {

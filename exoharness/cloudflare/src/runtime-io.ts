@@ -111,7 +111,6 @@ export type HostRequest =
 export class RuntimeIO {
   readonly harnessProcesses = new SandboxProcessClient();
   private codex?: ReturnType<typeof createCodexHarness>;
-  private readonly processWaits = new Map<string, Promise<void>>();
   private readonly storage: Storage;
   constructor(
     private readonly ctx: DurableObjectState,
@@ -320,13 +319,6 @@ export class RuntimeIO {
       const stub = this.env.SANDBOXES.getByName(command.sandbox_id);
       if (command.type === "end_activity") {
         await stub.endActivity(command.id);
-        if (!this.processWaits.has(command.sandbox_id)) {
-          const wait = stub
-            .waitForProcesses()
-            .finally(() => this.processWaits.delete(command.sandbox_id));
-          this.processWaits.set(command.sandbox_id, wait);
-          this.ctx.waitUntil(wait);
-        }
       } else {
         if (command.scope.type !== "thread")
           throw new Error("Cloudflare sandboxes require a thread scope");
@@ -431,7 +423,8 @@ export class RuntimeIO {
     const { payload } = r;
     const threadId = payload.conversation.record.id;
     const client: HarnessClient = {
-      requestExo: (request) => this.runtime.requestExo(request, signal),
+      requestExo: (request) =>
+        this.runtime.call({ type: "request", request }, signal),
       requestRuntime: (request) =>
         this.runtime.call(
           { type: "harness_request", thread_id: threadId, request },

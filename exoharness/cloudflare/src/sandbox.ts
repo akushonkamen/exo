@@ -428,10 +428,6 @@ export class ExoSandbox extends DurableObject<Env> {
     }
   }
 
-  async waitForProcesses(): Promise<void> {
-    await Promise.all([...this.processes].map((process) => process.wait()));
-  }
-
   async snapshot(identity: SandboxIdentity): Promise<ContainerSnapshot> {
     this.activeExecs++;
     try {

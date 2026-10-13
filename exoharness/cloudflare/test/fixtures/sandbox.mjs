@@ -250,9 +250,7 @@ export class FakeSandbox extends DurableObject {
       this.processes.delete(process);
     }
   }
-  async waitForProcesses() {
-    await Promise.all([...this.processes].map((p) => p.wait()));
-  }
+
   async snapshot() {
     return { id: "fixture-snapshot", size: 1 };
   }

@@ -21,7 +21,7 @@ pub trait Platform: Send + Sync {
     }
     async fn previews(
         &self,
-        _agent_id: exoharness::AgentId,
+        _agent: &dyn exoharness::AgentHandle,
         _thread: Arc<dyn ThreadHandle>,
     ) -> Result<Option<PreviewEndpoint>> {
         Ok(None)
@@ -224,7 +224,7 @@ async fn route(
             ("GET", ["previews"]) => {
                 let agent = service.agent(thread.agent_id).await?;
                 let conversation = service.thread(agent.as_ref(), thread.thread_id).await?;
-                return json(platform.previews(thread.agent_id, conversation).await?);
+                return json(platform.previews(agent.as_ref(), conversation).await?);
             },
             ("GET", ["event", "watch"]) => {
                 let agent = service.agent(thread.agent_id).await?;

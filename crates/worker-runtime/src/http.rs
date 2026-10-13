@@ -3,7 +3,6 @@ use crate::host::Host;
 pub(crate) use api::Request;
 use async_trait::async_trait;
 use executor::{
-    Runtime,
     managed_agents::{http as api, service::Service},
     runtime_host::RuntimeHost,
 };
@@ -36,20 +35,14 @@ impl api::Platform for Platform<'_> {
     }
 }
 pub(crate) async fn handle(
-    runtime: &Runtime,
+    service: &Service<'_>,
     host: &Arc<Host>,
-    updates: &tokio::sync::Mutex<()>,
     progress: &tokio::sync::broadcast::Sender<exoharness::Event>,
     request: Request,
     account_id: &str,
     id: u32,
 ) -> Response {
-    let service = Service {
-        runtime,
-        agent_id: None,
-        definition_updates: updates,
-    };
-    match api::handle(&service, &Platform { host, account_id }, progress, &request).await {
+    match api::handle(service, &Platform { host, account_id }, progress, &request).await {
         api::Response::Json { status, body } => Response::Json { status, body },
         api::Response::Error { status, message } => {
             #[derive(Serialize)]

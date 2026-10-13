@@ -5,7 +5,7 @@ import { RuntimeIO } from "./runtime-io";
 
 class RuntimeObject extends DurableObject<Env> {
   protected readonly runtime: Runtime;
-  protected recovered?: Promise<unknown>;
+  protected recovered?: Promise<boolean>;
 
   constructor(ctx: DurableObjectState, env: Env, thread = false) {
     super(ctx, env);
@@ -19,7 +19,7 @@ class RuntimeObject extends DurableObject<Env> {
       thread,
     );
     io = new RuntimeIO(ctx, env, this.runtime);
-    if (!thread) this.recovered = Promise.resolve();
+    if (!thread) this.recovered = Promise.resolve(false);
     else
       ctx.waitUntil(
         this.recover().catch((error) =>
@@ -28,9 +28,9 @@ class RuntimeObject extends DurableObject<Env> {
       );
   }
 
-  protected recover(): Promise<unknown> {
+  protected recover(): Promise<boolean> {
     return (this.recovered ??= this.runtime
-      .call({ type: "drain_queue" })
+      .call<boolean>({ type: "drain_queue" })
       .catch((error) => {
         this.recovered = undefined;
         throw error;
@@ -60,12 +60,19 @@ class RuntimeObject extends DurableObject<Env> {
     try {
       await this.recover();
       const url = new URL(request.url);
-      const path = requestPath(request);
-      const result = await this.http(
-        request.method,
-        path,
-        url.search.slice(1),
-        await request.text(),
+      const result = await this.runtime.call<
+        { status: number; body: string } | { watch: number }
+      >(
+        {
+          type: "http",
+          account_id: this.env.ACCOUNT_ID,
+          request: {
+            method: request.method,
+            path: requestPath(url),
+            query: url.search.slice(1),
+            body: await request.text(),
+          },
+        },
         request.signal,
       );
       if ("watch" in result) {
@@ -98,42 +105,10 @@ class RuntimeObject extends DurableObject<Env> {
       );
     }
   }
-
-  private http(
-    method: string,
-    path: string[],
-    query: string,
-    body: string,
-    signal: AbortSignal,
-  ): Promise<{ status: number; body: string } | { watch: number }> {
-    return this.runtime.call(
-      {
-        type: "http",
-        account_id: this.env.ACCOUNT_ID,
-        request: { method, path, query, body },
-      },
-      signal,
-    );
-  }
 }
 
-export function staticAuthorization(
-  env: Env,
-  request: Request,
-): Response | undefined {
-  if (
-    env.ACCESS_AUD !== undefined ||
-    !env.EXO_TOKEN ||
-    request.headers.get("authorization") !== `Bearer ${env.EXO_TOKEN}`
-  )
-    return new Response("Unauthorized", {
-      status: 401,
-      headers: { "WWW-Authenticate": 'Bearer realm="exo"' },
-    });
-}
-
-export function requestPath(request: Request): string[] {
-  return new URL(request.url).pathname
+export function requestPath(url: URL): string[] {
+  return url.pathname
     .replace(/^\/exo\/?/, "")
     .split("/")
     .filter(Boolean)
@@ -163,8 +138,7 @@ export class ExoThread extends RuntimeObject {
   }
   async alarm(): Promise<void> {
     this.recovered = undefined;
-    await this.recover();
-    if (await this.runtime.call<boolean>({ type: "has_pending_turns" }))
+    if (await this.recover())
       await this.ctx.storage.setAlarm(Date.now() + 180_000);
   }
 }

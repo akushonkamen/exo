@@ -40,7 +40,6 @@ pub(crate) enum Operation {
     McpHttp {
         request: crate::mcp::HttpRequest,
     },
-    HasPendingTurns,
     DrainQueue,
     WatchNext {
         id: u32,
@@ -99,16 +98,7 @@ pub(crate) async fn run(
             request,
             account_id,
         } => Ok(Output::Http(
-            crate::http::handle(
-                &runtime,
-                &host,
-                &updates,
-                &progress,
-                request,
-                &account_id,
-                id,
-            )
-            .await,
+            crate::http::handle(&service, &host, &progress, request, &account_id, id).await,
         )),
         Operation::WatchNext { id } => {
             Ok(Output::Frame(host.watches.next(host.as_ref(), id).await?))
@@ -170,14 +160,13 @@ pub(crate) async fn run(
             execution.request_runtime(thread_id, request).await?,
         )),
         Operation::McpHttp { request } => Ok(Output::McpHttp(execution.mcp.fetch(request).await?)),
-        Operation::HasPendingTurns => Ok(Output::Bool(
-            !execution.coordinator.pending_threads().await?.is_empty(),
-        )),
         Operation::DrainQueue => {
             for thread in execution.coordinator.pending_threads().await? {
                 provider.wake_turn_queue(&runtime, thread).await?;
             }
-            Ok(Output::Unit(()))
+            Ok(Output::Bool(
+                !execution.coordinator.pending_threads().await?.is_empty(),
+            ))
         }
     }
 }
