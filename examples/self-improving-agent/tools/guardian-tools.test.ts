@@ -13,7 +13,9 @@ describe("guardian tools", () => {
     expect(guardianStateDir({ EXO_ROOT: "/tmp/eval-exo" }, "/src/exo")).toBe(
       "/tmp/eval-exo",
     );
-    expect(guardianStateDir({}, "/src/exo")).toBe("/src/exo/.exo");
+    expect(guardianStateDir({}, "/src/exo")).toBe(
+      "/src/examples/self-improving-agent/.exo",
+    );
   });
 
   it("registers only rebuild_and_restart_exo", () => {

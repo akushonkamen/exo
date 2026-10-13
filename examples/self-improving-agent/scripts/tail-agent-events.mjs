@@ -93,7 +93,7 @@ function parseHistory(value) {
 
 function printHelp() {
   console.log(`Usage:
-  node exo/scripts/tail-agent-events.mjs [agent-slug] [conversation-slug] [--history N]
+  node examples/self-improving-agent/scripts/tail-agent-events.mjs [agent-slug] [conversation-slug] [--history N]
 
 Defaults:
   agent-slug       exo-agent

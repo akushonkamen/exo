@@ -25,7 +25,7 @@ const DEFERRED_SCRIPT = new URL(
   "../scripts/deferred-rebuild-and-restart",
   import.meta.url,
 ).pathname;
-const ROOT_DIR = new URL("../..", import.meta.url).pathname;
+const ROOT_DIR = new URL("../../..", import.meta.url).pathname;
 const STATE_DIR = guardianStateDir(process.env, ROOT_DIR);
 const DEFERRED_LOG_PATH = join(STATE_DIR, "exo-service-guardian-actions.log");
 const UPDATE_DIR = join(STATE_DIR, "guardian-updates");

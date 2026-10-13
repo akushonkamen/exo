@@ -781,7 +781,7 @@ main() {
   # Build before the interactive prompts so answering them is the last step
   # before launch.
   info "Build Exo (takes a few minutes on first install)"
-  ./exo.sh build
+  ./examples/self-improving-agent/exo.sh build
 
   local env_file="$install_dir/.env"
   if [[ ! -f "$env_file" && -f "$install_dir/.env.example" ]]; then
@@ -817,7 +817,7 @@ main() {
   info "Configure Exo"
   USER_NAME="$(prompt_text "Your name, or blank to skip" "$USER_NAME")"
   AGENT_NAME="$(prompt_text "Agent display name" "$AGENT_NAME")"
-  ./exo.sh write-profile ${USER_NAME:+--user-name "$USER_NAME"}
+  ./examples/self-improving-agent/exo.sh write-profile ${USER_NAME:+--user-name "$USER_NAME"}
 
   info "Store model credential in the global vault"
   local model_origin="https://api.openai.com"
@@ -828,7 +828,7 @@ main() {
     --token-env "$MODEL_API_KEY_ENV" --allow-origin "$model_origin"
 
   info "Create your agent"
-  ./exo.sh setup-agent --agent-name "$AGENT_NAME" --model "$UPSTREAM_MODEL" \
+  ./examples/self-improving-agent/exo.sh setup-agent --agent-name "$AGENT_NAME" --model "$UPSTREAM_MODEL" \
     --credential "$MODEL_PROVIDER" ${MODEL_BASE_URL:+--base-url "$MODEL_BASE_URL"}
 
   print_success_banner "$install_dir" "$launch_dir"
@@ -863,12 +863,12 @@ EOF
   if [[ "$launch_dir" != "$dir" ]]; then
     echo "  cd $dir"
   fi
-  echo "  ./exo.sh"
+  echo "  ./examples/self-improving-agent/exo.sh"
   echo
   echo "That same command starts or reconnects to your agent any time. Also useful:"
-  echo "  ./exo.sh stop-all   stop everything; state is preserved"
-  echo "  ./exo.sh fresh      wipe agents and start over"
-  echo "  ./exo.sh --help     all commands"
+  echo "  ./examples/self-improving-agent/exo.sh stop-all   stop everything; state is preserved"
+  echo "  ./examples/self-improving-agent/exo.sh fresh      wipe agents and start over"
+  echo "  ./examples/self-improving-agent/exo.sh --help     all commands"
 }
 
 main "$@"

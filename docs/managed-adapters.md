@@ -152,7 +152,9 @@ shared-only execution. Never use an email supplied in message text or a display 
 For Slack, automatic email resolution requires trusting the specific workspace's
 directory as an identity authority and looking up the authenticated sender there,
 using `users:read` and `users:read.email`. Slack profile email is not a standalone
-verified-email proof. Only accept directory claims within that configured trust
+verified-email proof. Trusting an Enterprise Grid workspace includes members of
+the entire Grid organization, verified against the installation's enterprise ID.
+Only accept directory claims within that configured trust
 scope; guest and external Slack Connect profiles are not automatically authoritative
 for private vault ownership. Verified SSO claims can provide the same resolution.
 Other adapters that don't provide a trusted common identity may need an account
@@ -368,6 +370,14 @@ The runtime resumes a disconnected stream from its saved checkpoint. Resuming
 must neither rerun a completed turn nor enqueue its answer twice. Split long
 answers using each transport's limits and formatting rules.
 
+Back off transient observer failures without abandoning a recoverable turn.
+Malformed progress data stops automatic observation after five failures without
+cursor advancement. Close the Slack stream with an "Updates unavailable" error
+and log the thread, turn, and decoding error for the operator. This is a delivery
+failure, not a failed turn: preserve the underlying turn and conversation. The
+operator must investigate the saved event; a later message continues the same
+conversation, but the stopped delivery is not automatically retried.
+
 The outbox owns delivery retries, rate limits, and external message IDs. External
 delivery is at least once where the provider offers no idempotent send: a crash
 after a successful send but before recording its acknowledgement can duplicate a
@@ -408,6 +418,9 @@ Hosted deployment is also still planned.
 ## Implementation plan
 
 ### Performance follow-up
+
+These remain open: completed records accumulate, startup scans their history,
+and reconciliation and access checks still enumerate provider metadata.
 
 - Replace the startup scan of historical inbox, outbox, and decision records with
   a durable pending index. Compact completed delivery payloads while preserving

@@ -290,8 +290,10 @@ exo identity trust slack --workspace T123456
 
 Add `users:read.email` to the app's bot scopes, then reinstall it. The manifests
 already include `users:read`. Exo looks up the authenticated Slack sender
-and resolves their account through that trusted source. An email typed into a
-message does not select a private vault. Guest and external Slack Connect profiles
+and resolves their account through that trusted source. For an Enterprise Grid
+workspace, this trusts email claims from members of the whole Grid organization,
+including its other workspaces. An email typed into a message does not select a
+private vault. Guest and external Slack Connect profiles
 aren't automatically trusted for this purpose.
 
 If you want a stricter association, optionally pin the Slack workspace/user ID:
@@ -443,6 +445,10 @@ the agent as well: `/exo/agent/support-analyst/adapter/slack`.
 
 ## Troubleshooting
 
+- "Updates unavailable": malformed progress data stopped delivery after five
+  failed attempts without progress. The turn remains saved in Exo. Check the
+  server logs for its thread, turn, and decoding error before continuing the
+  conversation; this stopped reply is not automatically retried.
 - Socket connection fails: check that Socket Mode is enabled and that the app token has `connections:write`.
 - Only some Socket Mode messages arrive: check that another server isn't using the same app token. Slack distributes events across active connections; run one server per app token. See [multiple connections](https://docs.slack.dev/apis/events-api/using-socket-mode/#using-multiple-connections).
 - HTTP URL won't verify: check that Socket Mode is disabled, the Exo server is running, and the public URL forwards to its webhook path.

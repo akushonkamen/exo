@@ -46,6 +46,7 @@ pub(super) struct Inbox {
 pub(super) enum InboxError {
     TurnFailed(String),
     AccessRemoved,
+    InvalidProgress,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -225,7 +226,6 @@ impl AdapterStore {
     pub async fn put<T: Serialize>(&self, key: &str, value: &T) -> Result<()> {
         let mut guard = self.write_guard(key);
         self.storage.put_json(key, value).await?;
-        guard.invalidate();
         guard.committed = true;
         Ok(())
     }

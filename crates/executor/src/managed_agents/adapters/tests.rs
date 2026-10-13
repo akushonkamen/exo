@@ -302,15 +302,17 @@ async fn observer_errors_reconnect_but_failed_completion_closes_the_input() -> R
     let f = Fixture::new().await?;
     let message = f.input("UALICE", "1.0");
     let (mut inbox, thread, turn) = f.pending_turn(&message).await?;
-    f.service.streams.lock().unwrap().insert(
-        stream_key(&f.deployment, &inbox),
-        crate::ExecutionStreamHandle::new(futures::stream::iter(vec![Err(anyhow::anyhow!(
-            "work retained for recovery"
-        ))])),
-    );
-    f.service.drain_stream(&f.deployment, &mut inbox).await?;
-    assert!(!inbox.complete);
-    assert!(inbox.error.is_none());
+    for _ in 0..=INVALID_PROGRESS_RETRY_LIMIT {
+        f.service.streams.lock().unwrap().insert(
+            stream_key(&f.deployment, &inbox),
+            crate::ExecutionStreamHandle::new(futures::stream::iter(vec![Err(anyhow::anyhow!(
+                "work retained for recovery"
+            ))])),
+        );
+        f.service.drain_stream(&f.deployment, &mut inbox).await?;
+        assert!(!inbox.complete);
+        assert!(inbox.error.is_none());
+    }
     turn.add_events(vec![EventData::Messages {
         messages: vec![Message::Assistant {
             content: AssistantContent::String("Recovered answer.".into()),
@@ -406,7 +408,8 @@ async fn reconnecting_after_an_error_checkpoint_preserves_failed_completion() ->
 }
 
 #[tokio::test]
-async fn malformed_observer_events_back_off_without_reposting_reconnecting() -> Result<()> {
+async fn malformed_observer_events_back_off_then_stop_delivery_without_ending_the_turn()
+-> Result<()> {
     let f = Fixture::new().await?;
     let message = f.input("UALICE", "1.0");
     let (mut inbox, thread, turn) = f.pending_turn(&message).await?;
@@ -454,6 +457,53 @@ async fn malformed_observer_events_back_off_without_reposting_reconnecting() -> 
         !requests
             .iter()
             .any(|request| request.url.path() == "/api/chat.appendStream")
+    );
+    for attempt in 3..=INVALID_PROGRESS_RETRY_LIMIT {
+        let stream = f
+            .service
+            .root
+            .watch_turn(thread.as_ref(), turn.record().clone(), inbox.cursor)
+            .await?;
+        f.service
+            .streams
+            .lock()
+            .unwrap()
+            .insert(stream_key(&f.deployment, &inbox), stream);
+        f.service.drain_stream(&f.deployment, &mut inbox).await?;
+        assert_eq!(inbox.observer_retry.as_ref().unwrap().attempts, attempt);
+        assert_eq!(inbox.complete, attempt == INVALID_PROGRESS_RETRY_LIMIT);
+    }
+    assert_eq!(inbox.error, Some(InboxError::InvalidProgress));
+    assert!(
+        !thread
+            .get_events(None)
+            .await?
+            .events
+            .iter()
+            .any(|event| matches!(event.data, EventData::TurnEnded))
+    );
+    f.service.process_input(&f.deployment, &mut inbox).await?;
+    f.service.deliver(&f.deployment).await?;
+    assert_eq!(
+        f.inbox(&message).await?.error,
+        Some(InboxError::InvalidProgress)
+    );
+    assert!(
+        f.service
+            .store
+            .pending::<Inbox>(&format!("adapters/v1/{}/inbox", f.deployment.id))
+            .await?
+            .is_empty()
+    );
+    assert_eq!(
+        f.slack
+            .received_requests()
+            .await
+            .unwrap()
+            .iter()
+            .filter(|request| request.url.path() == "/api/chat.stopStream")
+            .count(),
+        1
     );
     turn.finish().await?;
     f.service.root.shutdown().await

@@ -11,16 +11,16 @@ Use this map before changing Exo itself.
 
 ## Important Paths
 
-- `exo/harness.ts`: assembles Exo's prompt and tool registry.
-- `exo/prompts/me.md`: durable identity and operating rules.
-- `exo/tools/guardian-tools.ts`: model-visible host maintenance tool.
-- `exo/scripts/exo-service-guardian`: host-side build and service control.
-- `./exo.sh`: local startup script for REPL, scheduler, adapters, sandbox, and repo mount.
-- `exo/tools/sandbox-tools.ts`: sandbox snapshot and rewind tool definitions.
-- `exo/tools/introspection-tools.ts`: `list_conversation_events` introspection tool.
-- `exo/tools/host-tools.ts`: `registerHostTool` helper that bridges TypeScript tool definitions to Rust execution.
-- `exo/tools/scheduler-tools.ts`: scheduled task tool definitions.
-- `exo/scheduler-runner/`: host scheduler runner binary.
+- `examples/self-improving-agent/harness.ts`: assembles Exo's prompt and tool registry.
+- `examples/self-improving-agent/prompts/me.md`: durable identity and operating rules.
+- `examples/self-improving-agent/tools/guardian-tools.ts`: model-visible host maintenance tool.
+- `examples/self-improving-agent/scripts/exo-service-guardian`: host-side build and service control.
+- `./examples/self-improving-agent/exo.sh`: local startup script for REPL, scheduler, adapters, sandbox, and repo mount.
+- `examples/self-improving-agent/tools/sandbox-tools.ts`: sandbox snapshot and rewind tool definitions.
+- `examples/self-improving-agent/tools/introspection-tools.ts`: `list_conversation_events` introspection tool.
+- `examples/self-improving-agent/tools/host-tools.ts`: `registerHostTool` helper that bridges TypeScript tool definitions to Rust execution.
+- `examples/self-improving-agent/tools/scheduler-tools.ts`: scheduled task tool definitions.
+- `examples/self-improving-agent/scheduler-runner/`: host scheduler runner binary.
 - `crates/executor/src/managed_agents/adapters/`: managed Slack connection, routing, and delivery.
 - `website/docs-src/adapters/slack.md`: Slack setup and configuration.
 - `crates/executor/src/native/harness_tool.rs`: Rust tool execution runtime (`execute_tool` match arms).
@@ -42,11 +42,11 @@ Use this map before changing Exo itself.
 From the repository root on the host:
 
 ```bash
-./exo.sh
-exo/scripts/exo-service-guardian status
-exo/scripts/exo-service-guardian build
-exo/scripts/exo-service-guardian restart-all --build
-./exo.sh --control
+./examples/self-improving-agent/exo.sh
+examples/self-improving-agent/scripts/exo-service-guardian status
+examples/self-improving-agent/scripts/exo-service-guardian build
+examples/self-improving-agent/scripts/exo-service-guardian restart-all --build
+./examples/self-improving-agent/exo.sh --control
 ```
 
 Inside the Exo sandbox, inspect the mounted code with:
@@ -62,7 +62,7 @@ ls exo
 Tools have two layers, and both matter:
 
 1. **Definition (TypeScript)**: the model only sees tools registered in the
-   TypeScript registry each turn (`exo/harness.ts`). Sources are
+   TypeScript registry each turn (`examples/self-improving-agent/harness.ts`). Sources are
    built-in tools, library tool modules, and registry-installed tools managed
    with `inspect_tools` / `manage_tool`. The older `.exo/agent-tools/` scan and
    `install_agent_tool` / `uninstall_agent_tool` tools are compatibility
@@ -73,7 +73,7 @@ Tools have two layers, and both matter:
    in `crates/executor/src/native/harness_tool.rs`.
 
 For a local manifest tool, create its directory under
-`/workspace/exo/.exo/tool-sources/<name>` and call `manage_tool` with the
+`/workspace/examples/self-improving-agent/.exo/tool-sources/<name>` and call `manage_tool` with the
 workspace-relative path `.exo/tool-sources/<name>`. `shell` sees sandbox paths,
 while `manage_tool` resolves local sources in the host harness; never pass
 `/tmp/...` or another absolute sandbox path.
@@ -87,8 +87,8 @@ definition that delegates to it:
    `crates/executor/src/native/harness_tool.rs` (see `list_sandbox_snapshots` for a
    full example).
 2. Register a TypeScript definition with the same name using
-   `registerHostTool` from `exo/tools/host-tools.ts`, wired into the
-   registry in `exo/harness.ts` (see `exo/tools/sandbox-tools.ts` for the
+   `registerHostTool` from `examples/self-improving-agent/tools/host-tools.ts`, wired into the
+   registry in `examples/self-improving-agent/harness.ts` (see `examples/self-improving-agent/tools/sandbox-tools.ts` for the
    pattern).
 3. Call `rebuild_and_restart_exo` with a short `reason` naming the change so
    both the Rust binary and the harness pick up the update and the durable
@@ -111,8 +111,8 @@ called from the model. The old adapter lifecycle events are no longer emitted.
 
 - Use `rebuild_and_restart_exo` for the fixed self-update build-and-restart path.
 - Service status and logs are operator CLI responsibilities:
-  `exo/scripts/exo-service-guardian status` and
-  `exo/scripts/exo-service-guardian logs`.
+  `examples/self-improving-agent/scripts/exo-service-guardian status` and
+  `examples/self-improving-agent/scripts/exo-service-guardian logs`.
 - Use the `shell` tool for sandbox-local inspection and experiments.
 - Use `snapshot_sandbox` before risky filesystem changes.
 - Use `rebuild_and_restart_exo` after code changes that require host services
@@ -120,7 +120,7 @@ called from the model. The old adapter lifecycle events are no longer emitted.
   being activated. The restart is deferred briefly so the current turn can
   finish before services stop.
 - In control mode, service guardian builds write `.exo/exo-control.restart`;
-  the `./exo.sh --control` wrapper restarts only the child `exo run` and
+  the `./examples/self-improving-agent/exo.sh --control` wrapper restarts only the child `exo run` and
   keeps the user's terminal open.
 - Service restarts drain gracefully: the guardian writes
   `.exo/exo-adapters.restart` / `.exo/exo-scheduler.restart`, the

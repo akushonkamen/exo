@@ -25,7 +25,7 @@ const EXO_IDENTITY_PROMPT = readFileSync(
 ).trim();
 const DEFAULT_LOCAL_PROMPT_PATH = ".exo/exo-profile.md";
 const DEFAULT_EXO_REPO = "/workspace/exo";
-const DEFAULT_EXO_SELF_MAP = `${DEFAULT_EXO_REPO}/exo/SELF.md`;
+const DEFAULT_EXO_SELF_MAP = `${DEFAULT_EXO_REPO}/examples/self-improving-agent/SELF.md`;
 
 export default defineHarness({
   nativeToolApprovals: true,

@@ -15,7 +15,7 @@ import type {
 // Durable agent-writable memory: a single global store that persists across
 // every conversation for this agent. Stored as a JSON artifact on the agent
 // handle, mirroring how config/executor.json is persisted. See
-// exo/docs/SELF-CONTROL.md section 2 for the design.
+// examples/self-improving-agent/docs/SELF-CONTROL.md section 2 for the design.
 const MEMORY_ARTIFACT_PATH = "memory/exo-memory.json";
 // Soft caps so always-injecting memory cannot grow the prompt without bound.
 const MAX_ENTRIES = 200;

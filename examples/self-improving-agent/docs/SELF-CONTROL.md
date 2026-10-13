@@ -32,22 +32,22 @@ This document defines the self-introspection and self-control capability areas w
 
 Exo should always be able to inspect the code that defines its own behavior, change it, and restart itself on the new build.
 
-**Seeing its own code.** Local startup with `./exo.sh` mounts the repository into the sandbox at `/workspace/exo` (configurable with `--self-repo-mount` or `EXO_REPO`). The shell tool therefore starts with a stable view of the source tree. `exo/SELF.md` is the checked-in self map — a compact navigation guide to prompts, harness assembly, adapters, scheduler, supervisors, and local state — and the harness tells Exo its path each turn through `EXO_SELF_MAP`. The self map is intentionally navigational, not a full architecture document.
+**Seeing its own code.** Local startup with `./examples/self-improving-agent/exo.sh` mounts the repository into the sandbox at `/workspace/exo` (configurable with `--self-repo-mount` or `EXO_REPO`). The shell tool therefore starts with a stable view of the source tree. `examples/self-improving-agent/SELF.md` is the checked-in self map — a compact navigation guide to prompts, harness assembly, adapters, scheduler, supervisors, and local state — and the harness tells Exo its path each turn through `EXO_SELF_MAP`. The self map is intentionally navigational, not a full architecture document.
 
 **Editing its own code.** Edits happen through the shell tool against the repo mount. Git is the change history and the rollback mechanism for code: Exo can diff, commit, and revert its own modifications (see area 8).
 
 **Building and rerunning itself.** Host-side actions happen outside the sandbox through two cooperating supervisors:
 
-- `exo/scripts/exo-service-guardian` is the host service supervisor: it builds Exo, shows service status, prints scheduler and adapter logs, and restarts the scheduler or adapter runners while preserving `.exo` state.
-- `./exo.sh --control` is the terminal supervisor: it keeps the user's terminal open, streams service logs, runs the interactive `exo run` as a child, and can restart only that child after a rebuild.
+- `examples/self-improving-agent/scripts/exo-service-guardian` is the host service supervisor: it builds Exo, shows service status, prints scheduler and adapter logs, and restarts the scheduler or adapter runners while preserving `.exo` state.
+- `./examples/self-improving-agent/exo.sh --control` is the terminal supervisor: it keeps the user's terminal open, streams service logs, runs the interactive `exo run` as a child, and can restart only that child after a rebuild.
 
-The model-visible `rebuild_and_restart_exo` tool exposes one fixed self-update operation: validate and build Exo, then hand a scheduler and adapter restart to a detached guardian process so the current model turn can finish. Pass `reason` as a short free-text note describing the change being activated. On completion, the outcome is written under `.exo/guardian-updates/` and also appended to this conversation's event log as a `rebuild_and_restart_exo` host event (succeeded or failed), so `list_conversation_events` can answer whether a rebuild finished. Service status, logs, and targeted service controls stay in the operator-facing `exo/scripts/exo-service-guardian` CLI.
+The model-visible `rebuild_and_restart_exo` tool exposes one fixed self-update operation: validate and build Exo, then hand a scheduler and adapter restart to a detached guardian process so the current model turn can finish. Pass `reason` as a short free-text note describing the change being activated. On completion, the outcome is written under `.exo/guardian-updates/` and also appended to this conversation's event log as a `rebuild_and_restart_exo` host event (succeeded or failed), so `list_conversation_events` can answer whether a rebuild finished. Service status, logs, and targeted service controls stay in the operator-facing `examples/self-improving-agent/scripts/exo-service-guardian` CLI.
 
 The guardian restarts the managed adapter runner with SIGTERM and waits for its shutdown before starting it again. Pending inputs and replies remain in its durable inbox and outbox for recovery. Scheduler restarts still use `.exo/exo-scheduler.restart`: the scheduler claims the marker, finishes its current pass, and exits. If either service fails to stop within its grace period, the guardian stops its process tree. Builds also write `.exo/exo-control.restart`, which the control wrapper claims to restart only the `exo run` child without closing the user's terminal.
 
 The managed Slack adapter does not send reboot announcements.
 
-The canonical local startup is plain `./exo.sh` (Docker provider/backend, repo self-map mount, guardian config, control REPL — the default `--template canonical`). `./exo.sh fresh` gives the same shape from a clean agent/conversation state.
+The canonical local startup is plain `./examples/self-improving-agent/exo.sh` (Docker provider/backend, repo self-map mount, guardian config, control REPL — the default `--template canonical`). `./examples/self-improving-agent/exo.sh fresh` gives the same shape from a clean agent/conversation state.
 
 ## 2. Durable Memory and Identity
 
@@ -96,10 +96,10 @@ This is deliberately not embedding-based retrieval. For a small set of short fac
 
 Exo should be able to inspect each of its components when debugging or evolving them, before escalating to restarts.
 
-- **Host services**: operators use `exo/scripts/exo-service-guardian status` for service state and `exo/scripts/exo-service-guardian logs` for scheduler and adapter runner logs. The agent uses `rebuild_and_restart_exo` only for its fixed self-update flow. Deferred rebuild output is written to `.exo/exo-service-guardian-actions.log`.
+- **Host services**: operators use `examples/self-improving-agent/scripts/exo-service-guardian status` for service state and `examples/self-improving-agent/scripts/exo-service-guardian logs` for scheduler and adapter runner logs. The agent uses `rebuild_and_restart_exo` only for its fixed self-update flow. Deferred rebuild output is written to `.exo/exo-service-guardian-actions.log`.
 - **Adapters**: inspect the managed Slack server's connection and delivery logs.
   The old `list_adapters` and `list_adapter_events` tools are no longer available.
-  See [the Slack setup guide](../website/docs-src/adapters/slack.md).
+  See [the Slack setup guide](../../../website/docs-src/adapters/slack.md).
 - **Scheduler**: `list_scheduled_tasks` shows tasks and their recent run results (exit codes, errors). Operators can inspect scheduler runner logs through the guardian CLI.
 - **Conversation and host lifecycle**: `list_conversation_events` (area 2).
 - **Sandbox processes**: the shell tool itself, plus sandbox process events recorded in the conversation log.
@@ -124,11 +124,11 @@ Gap: there is no sandbox _cloning_ — starting a second sandbox from an existin
 
 ## 5. Capability Extension: Tools and Adapters
 
-**Tools.** Tools are layered: the TypeScript registry defines what the model can see and call, and a handler either runs in TypeScript or delegates execution to the Rust tool runtime (`crates/executor/src/native/harness_tool.rs`) via `execution.context.executeTool(...)` with the same function name. Rust-backed tools therefore always need a TypeScript definition; `registerHostTool` in `exo/tools/host-tools.ts` is the standard bridge, and `exo/tools/sandbox-tools.ts` is the reference example. A Rust match arm without a registered TypeScript definition is unreachable, and an agent-installed tool must never reuse the name of a Rust-backed tool.
+**Tools.** Tools are layered: the TypeScript registry defines what the model can see and call, and a handler either runs in TypeScript or delegates execution to the Rust tool runtime (`crates/executor/src/native/harness_tool.rs`) via `execution.context.executeTool(...)` with the same function name. Rust-backed tools therefore always need a TypeScript definition; `registerHostTool` in `examples/self-improving-agent/tools/host-tools.ts` is the standard bridge, and `examples/self-improving-agent/tools/sandbox-tools.ts` is the reference example. A Rust match arm without a registered TypeScript definition is unreachable, and an agent-installed tool must never reuse the name of a Rust-backed tool.
 
 `inspect_tools` and `manage_tool` are the default discovery and installation path for registry-backed tools. Registry-installed tools load every turn regardless of the legacy compatibility flag. The older `install_agent_tool` / `uninstall_agent_tool` pair and `.exo/agent-tools/` scan are available only when `enableAgentToolCreation` is explicitly enabled. New Rust-backed capability goes through the code-edit path instead (area 1): implement the match arm, register the definition, rebuild, restart.
 
-Local `manage_tool` sources must be workspace-relative. Create them under `/workspace/exo/.exo/tool-sources/<name>` from sandbox `shell`, then install `.exo/tool-sources/<name>`. Absolute paths such as `/tmp/...` belong to the sandbox filesystem and are not valid host-local source paths.
+Local `manage_tool` sources must be workspace-relative. Create them under `/workspace/examples/self-improving-agent/.exo/tool-sources/<name>` from sandbox `shell`, then install `.exo/tool-sources/<name>`. Absolute paths such as `/tmp/...` belong to the sandbox filesystem and are not valid host-local source paths.
 
 **Skills.** Between prompt text and code-backed tools sits a third extension
 surface: durable skills in the standard agent-skills format (`SKILL.md` with
@@ -150,10 +150,10 @@ longer depend on `send_adapter_message` or adapter wakeup prompts.
 
 Exo's behavior is defined by a small set of prompt surfaces it can read (and, through the code-edit path, change):
 
-- `exo/prompts/me.md` — the durable identity prompt: broad behavioral rules such as when to inspect state first, when to prefer reversible operations, and how to think about external side effects.
-- `exo/harness.ts` — assembles the developer prompt each turn and describes the available self-control surfaces at a high level.
-- `exo/SELF.md` — the compact self map for navigating its own code.
-- Tool definitions — `exo/tools/sandbox-tools.ts`, `scheduler-tools.ts`, `guardian-tools.ts`, `introspection-tools.ts` carry model-visible descriptions and JSON schemas; these are the most direct prompts for when and how to call each tool. `exoharness/typescript/harness/built-in-tools.ts` describes `shell`, `inspect_tools`, `manage_tool`, and the opt-in legacy creation tools.
+- `examples/self-improving-agent/prompts/me.md` — the durable identity prompt: broad behavioral rules such as when to inspect state first, when to prefer reversible operations, and how to think about external side effects.
+- `examples/self-improving-agent/harness.ts` — assembles the developer prompt each turn and describes the available self-control surfaces at a high level.
+- `examples/self-improving-agent/SELF.md` — the compact self map for navigating its own code.
+- Tool definitions — `examples/self-improving-agent/tools/sandbox-tools.ts`, `scheduler-tools.ts`, `guardian-tools.ts`, `introspection-tools.ts` carry model-visible descriptions and JSON schemas; these are the most direct prompts for when and how to call each tool. `exoharness/typescript/harness/built-in-tools.ts` describes `shell`, `inspect_tools`, `manage_tool`, and the opt-in legacy creation tools.
 - Wakeup prompts — `crates/executor/src/native/scheduler_runtime.rs` builds scheduled-task wakeup prompts from each task's `reportPrompt`.
 - `.exo/exo-profile.md` (or `EXO_LOCAL_PROMPT_FILE`) — local, user-specific instructions that are not checked in.
 
@@ -175,7 +175,7 @@ What constitutes "Exo" for cloning purposes (the area 2 inventory):
 
 Building blocks that already exist: conversation `fork` in the exoharness API, sandbox snapshots, the adapter records being plain JSON under `.exo`, and the canonical event log for the clone to know its own provenance (a `cloned_from` custom event would make lineage explicit).
 
-The likely path is an export/import pair: a guardian-level `export` action that produces a portable bundle (git ref + `.exo` state + secret manifest listing what must be re-provisioned + snapshot references), and a bootstrap path on the target (`./exo.sh` already encapsulates most platform differences: Docker vs. apple-container, launch mechanics). Migration is then export, transfer, import, re-provision secrets, and re-bind adapter identities — with the old instance drained (area 1's markers) before the new one takes over the external identities.
+The likely path is an export/import pair: a guardian-level `export` action that produces a portable bundle (git ref + `.exo` state + secret manifest listing what must be re-provisioned + snapshot references), and a bootstrap path on the target (`./examples/self-improving-agent/exo.sh` already encapsulates most platform differences: Docker vs. apple-container, launch mechanics). Migration is then export, transfer, import, re-provision secrets, and re-bind adapter identities — with the old instance drained (area 1's markers) before the new one takes over the external identities.
 
 ## 8. Self-Verification and Rollback
 

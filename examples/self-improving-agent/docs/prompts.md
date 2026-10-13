@@ -27,16 +27,16 @@ prompt materialization.
 
 ## Quick Change Guide
 
-| Goal                                       | Best place to change                                                                                    |
-| ------------------------------------------ | ------------------------------------------------------------------------------------------------------- |
-| Change your local Exo name/persona         | `.exo/exo-profile.md`                                                                                   |
-| Change committed Exo identity for everyone | `exo/prompts/me.md`                                                                                     |
-| Change Exo operating policy                | `exo/harness.ts`                                                                                        |
-| Change scheduled-task report wording       | `crates/executor/src/native/scheduler_runtime.rs`                                                       |
-| Change TypeScript prompt assembly          | `exoharness/typescript/model-runtime/turn-loop.ts` and `exoharness/typescript/harness/index.ts`         |
-| Change Rust basic harness prompt assembly  | `crates/executor/src/basic.rs`                                                                          |
-| Change RLM system/root prompts             | `crates/executor/src/native/rlm.rs`                                                                     |
-| Change tool-use guidance                   | tool definitions in `exoharness/typescript/harness/*`, `exo/tools/*-tools.ts`, or Rust tool definitions |
+| Goal                                       | Best place to change                                                                                                              |
+| ------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------- |
+| Change your local Exo name/persona         | `.exo/exo-profile.md`                                                                                                             |
+| Change committed Exo identity for everyone | `examples/self-improving-agent/prompts/me.md`                                                                                     |
+| Change Exo operating policy                | `examples/self-improving-agent/harness.ts`                                                                                        |
+| Change scheduled-task report wording       | `crates/executor/src/native/scheduler_runtime.rs`                                                                                 |
+| Change TypeScript prompt assembly          | `exoharness/typescript/model-runtime/turn-loop.ts` and `exoharness/typescript/harness/index.ts`                                   |
+| Change Rust basic harness prompt assembly  | `crates/executor/src/basic.rs`                                                                                                    |
+| Change RLM system/root prompts             | `crates/executor/src/native/rlm.rs`                                                                                               |
+| Change tool-use guidance                   | tool definitions in `exoharness/typescript/harness/*`, `examples/self-improving-agent/tools/*-tools.ts`, or Rust tool definitions |
 
 ## Exoharness
 
@@ -127,11 +127,11 @@ description rather than an identity prompt.
 Important tool prompt surfaces:
 
 - `exoharness/typescript/harness/built-in-tools.ts`
-- `exo/tools/scheduler-tools.ts`
-- `exo/tools/sandbox-tools.ts`
-- `exo/tools/guardian-tools.ts`
-- `exo/tools/introspection-tools.ts`
-- `exo/tools/fal/fal-tools.ts`
+- `examples/self-improving-agent/tools/scheduler-tools.ts`
+- `examples/self-improving-agent/tools/sandbox-tools.ts`
+- `examples/self-improving-agent/tools/guardian-tools.ts`
+- `examples/self-improving-agent/tools/introspection-tools.ts`
+- `examples/self-improving-agent/tools/fal/fal-tools.ts`
 - `crates/executor/src/basic.rs`
 - `crates/executor/src/native/rlm.rs`
 
@@ -195,17 +195,17 @@ Prefer concise operational answers.
 You can create it interactively with:
 
 ```bash
-./exo.sh setup-profile
+./examples/self-improving-agent/exo.sh setup-profile
 ```
 
 You can use a different local profile path with:
 
 - `EXO_LOCAL_PROMPT_FILE`
-- `./exo.sh --local-prompt-file <path>`
+- `./examples/self-improving-agent/exo.sh --local-prompt-file <path>`
 
 For committed Exo behavior, use:
 
-- `exo/prompts/me.md`
+- `examples/self-improving-agent/prompts/me.md`
 
 That file should stay generic. Do not put machine-specific details, secrets, or
 personal preferences there.
@@ -214,18 +214,18 @@ personal preferences there.
 
 The Exo harness builds its instruction list in:
 
-- `exo/harness.ts`
+- `examples/self-improving-agent/harness.ts`
 
 It currently loads:
 
 1. base TypeScript harness instructions
-2. `exo/prompts/me.md`
+2. `examples/self-improving-agent/prompts/me.md`
 3. an Exo-specific developer message describing scheduler, sandbox,
    guardian, adapter, and self-maintenance behavior
 4. a Fal image-generation developer message
 5. optional local profile text from `.exo/exo-profile.md`
 
-Change `exo/harness.ts` when you want to change global Exo
+Change `examples/self-improving-agent/harness.ts` when you want to change global Exo
 operating policy, such as how it should treat adapters, scheduled work, self
 maintenance, Fal images, or sandbox scope.
 
@@ -234,7 +234,7 @@ maintenance, Fal images, or sandbox scope.
 The Exo launcher can send prompt files into the conversation before the REPL
 starts:
 
-- `./exo.sh`
+- `./examples/self-improving-agent/exo.sh`
 
 Important flags:
 
@@ -242,14 +242,14 @@ Important flags:
 
 The file is a one-time user message. Persistent instructions belong in the agent's
 instructions or local profile. Adapter setup is documented in
-[the Slack setup guide](../../website/docs-src/adapters/slack.md).
+[the Slack setup guide](../../../website/docs-src/adapters/slack.md).
 
 ### Self Map And Self-Control Docs
 
 Exo is told where to inspect its own source tree through:
 
-- `exo/SELF.md`
-- `exo/docs/SELF-CONTROL.md`
+- `examples/self-improving-agent/SELF.md`
+- `examples/self-improving-agent/docs/SELF-CONTROL.md`
 
 The startup script mounts the repository at `/workspace/exo` by default and the
 harness tells the model to start with the self map when modifying Exo.
@@ -300,11 +300,11 @@ the harness chooses to include.
 
 Exo tells the model about high-level capabilities in:
 
-- `exo/harness.ts`
-- `exo/prompts/me.md`
-- `exo/SELF.md`
+- `examples/self-improving-agent/harness.ts`
+- `examples/self-improving-agent/prompts/me.md`
+- `examples/self-improving-agent/SELF.md`
 - tool descriptions in `exoharness/typescript/harness/*`
-- Exo tool descriptions in `exo/tools/*-tools.ts`
+- Exo tool descriptions in `examples/self-improving-agent/tools/*-tools.ts`
 
 This is where the model learns that it can schedule tasks, inspect events, take
 sandbox snapshots, rewind sandboxes, create adapters, send adapter messages,
@@ -317,7 +317,7 @@ The model learns about sandbox behavior from harness instructions and tool
 descriptions. Exo's developer prompt says that conversations default to the
 agent sandbox and explains when to use conversation or task sandboxes.
 
-`./exo.sh` configures the important filesystem mounts:
+`./examples/self-improving-agent/exo.sh` configures the important filesystem mounts:
 
 - this repository at `/workspace/exo`
 - the Fal image cache at `/fal`
@@ -325,8 +325,8 @@ agent sandbox and explains when to use conversation or task sandboxes.
 
 Relevant files:
 
-- `exo/harness.ts`
-- `./exo.sh`
+- `examples/self-improving-agent/harness.ts`
+- `./examples/self-improving-agent/exo.sh`
 - `crates/executor/src/native/conversation_sandbox.rs`
 - `crates/executor/src/native/agent_sandbox.rs`
 
@@ -356,8 +356,8 @@ Examples:
 - Wakeup prompts should include enough routing context for the agent to take the
   right action without relying on hidden state.
 - Put local identity and preferences in `.exo/exo-profile.md`.
-- Put general Exo behavior in `exo/prompts/me.md` or
-  `exo/harness.ts`.
+- Put general Exo behavior in `examples/self-improving-agent/prompts/me.md` or
+  `examples/self-improving-agent/harness.ts`.
 - Put wakeup-specific routing rules in the wakeup prompt that creates the user
   message.
 - After changing setup prompts, recreate or update existing adapters/tasks; the

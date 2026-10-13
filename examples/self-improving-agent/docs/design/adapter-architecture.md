@@ -1,7 +1,7 @@
 # Exo Adapter Architecture
 
 This describes the earlier self-agent implementation. The replacement for managed
-agents is sketched in [Managed adapters](../../../docs/managed-adapters.md).
+agents is sketched in [Managed adapters](../../../../docs/managed-adapters.md).
 
 Exo adapters are host-owned long-running integrations between an Exo
 conversation and an external application. The shared worker shape supports
@@ -29,13 +29,13 @@ The implementation is split across a few small executor and CLI modules:
   messages.
 - `crates/executor/src/native/adapter/worker.rs` implements the generic JSONL worker
   bridge used by host-supervised sidecar adapters.
-- `exo/adapters/<type>/worker.ts` contains protocol-specific behavior for
+- `examples/self-improving-agent/adapters/<type>/worker.ts` contains protocol-specific behavior for
   agent-cli, Discord, ExoChat, IRC, Signal, Slack, and WhatsApp.
 - `crates/executor/src/native/adapter/tools.rs` implements the host-backed tool calls
   used by Exo.
 - `exoharness/typescript/harness/adapter-tools.ts` exposes the model-facing Exo tools.
 - `crates/cli/src/serve.rs` supervises adapters alongside the managed-agent HTTP service.
-- `./exo.sh` starts the adapter runner next to the scheduler.
+- `./examples/self-improving-agent/exo.sh` starts the adapter runner next to the scheduler.
 
 At a high level:
 
@@ -179,7 +179,7 @@ Outbound messages are always explicit:
    the worker.
 4. The worker sends the message through the external protocol.
 
-This boundary keeps protocol behavior in `exo/adapters`, model-facing tool
+This boundary keeps protocol behavior in `examples/self-improving-agent/adapters`, model-facing tool
 schemas in the TypeScript harness, and durable records, process supervision,
 artifacts, wakeups, and the outbox in Rust.
 
@@ -200,7 +200,7 @@ flowchart LR
 The worker is launched with:
 
 ```bash
-pnpm tsx exo/adapters/whatsapp/worker.ts
+pnpm tsx examples/self-improving-agent/adapters/whatsapp/worker.ts
 ```
 
 If `authDir` is not configured, auth state is stored under the worker state dir's
@@ -235,7 +235,7 @@ flowchart LR
 The worker is launched with:
 
 ```bash
-pnpm tsx exo/adapters/signal/worker.ts
+pnpm tsx examples/self-improving-agent/adapters/signal/worker.ts
 ```
 
 If `account` is not configured, the worker runs `signal-cli link`, prints a
@@ -286,7 +286,7 @@ The adapter runner is started by:
 ./target/debug/exo run --serve --adapter-limit 50
 ```
 
-`./exo.sh` starts this automatically unless `--no-adapters` is
+`./examples/self-improving-agent/exo.sh` starts this automatically unless `--no-adapters` is
 provided. It also records a pid file at `.exo/exo-adapters.pid`.
 
 The runtime periodically lists enabled adapters and starts one supervision task

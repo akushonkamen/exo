@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 EXO_ROOT="${EXO_ROOT:-$ROOT_DIR/.exo}"
 STATE_DIR="$EXO_ROOT"
 CONFIG_FILE="${EXO_SERVICE_GUARDIAN_CONFIG:-$STATE_DIR/exo-service-guardian.env}"
@@ -40,7 +40,7 @@ fi
 usage() {
   cat <<'EOF'
 Usage:
-  exo/scripts/exo-service-guardian <command> [options]
+  examples/self-improving-agent/scripts/exo-service-guardian <command> [options]
 
 Commands:
   status                    Show guardian-managed service status and logs
@@ -110,7 +110,7 @@ build_all() {
   echo "Building exo..."
   run_cargo build -p exo --ignore-rust-version
   echo "Building Exo scheduler runner..."
-  run_cargo build --manifest-path exo/scheduler-runner/Cargo.toml --ignore-rust-version
+  run_cargo build --manifest-path examples/self-improving-agent/scheduler-runner/Cargo.toml --ignore-rust-version
   request_repl_restart
 }
 

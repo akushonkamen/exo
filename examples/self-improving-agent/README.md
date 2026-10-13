@@ -4,7 +4,7 @@ Exo is a persistent agent built on Exo designed to be helpful wherever
 there is a task to do from a computer. It supports task scheduling, a full
 sandbox where it can install its own tools and integrations, and right now
 supports an interactive CLI. Slack uses the managed adapter; see
-[the Slack setup guide](../website/docs-src/adapters/slack.md).
+[the Slack setup guide](../../website/docs-src/adapters/slack.md).
 
 ## Quickstart
 
@@ -22,7 +22,7 @@ cp .env.example .env   # then fill in OPENAI_API_KEY
 2. Tell Exo who you are (optional but recommended):
 
 ```bash
-./exo.sh setup-profile
+./examples/self-improving-agent/exo.sh setup-profile
 ```
 
 This interactively asks for your name and any local instructions, and writes
@@ -33,7 +33,7 @@ reply. You can rerun this or edit the file directly at any time.
 3. Build and start everything with one command (run from the repo root):
 
 ```bash
-./exo.sh fresh
+./examples/self-improving-agent/exo.sh fresh
 ```
 
 This builds the `exo` binary, creates the agent and a `dev` conversation, pulls
@@ -52,9 +52,9 @@ Notes:
 
 - `fresh` deletes existing agents, conversations, and adapters first. For
   day-to-day restarts that keep state, drop `fresh`:
-  `./exo.sh`
+  `./examples/self-improving-agent/exo.sh`
 - For a minimal start without Docker defaults or adapter setup:
-  `./exo.sh --template minimal --pull-sandbox`
+  `./examples/self-improving-agent/exo.sh --template minimal --pull-sandbox`
 
 ## Self Introspection
 
@@ -63,17 +63,17 @@ this repository into the sandbox at `/workspace/exo` and makes that path
 available to the harness as `EXO_REPO`. The self map lives at:
 
 ```text
-/workspace/exo/exo/SELF.md
+/workspace/examples/self-improving-agent/examples/self-improving-agent/SELF.md
 ```
 
-The checked-in source for that map is `exo/SELF.md`. It points
+The checked-in source for that map is `examples/self-improving-agent/SELF.md`. It points
 Exo to the harness, prompts, adapter runtime, scheduler, sandbox tools, and
 service guardian. Use `--self-repo-mount <path>` or `EXO_REPO` to choose a
 different sandbox mount path.
 
 ## Service Guardian
 
-`exo/scripts/exo-service-guardian` is a host-side helper for
+`examples/self-improving-agent/scripts/exo-service-guardian` is a host-side helper for
 self-maintenance. It owns build and service-control actions that should happen
 outside the agent's sandbox, while preserving `.exo` state such as adapter
 pairing data, conversations, artifacts, and sandbox records.
@@ -81,21 +81,21 @@ pairing data, conversations, artifacts, and sandbox records.
 Common commands:
 
 ```bash
-exo/scripts/exo-service-guardian status
-exo/scripts/exo-service-guardian build
-exo/scripts/exo-service-guardian restart-adapters
-exo/scripts/exo-service-guardian restart-scheduler
-exo/scripts/exo-service-guardian restart-all --build
+examples/self-improving-agent/scripts/exo-service-guardian status
+examples/self-improving-agent/scripts/exo-service-guardian build
+examples/self-improving-agent/scripts/exo-service-guardian restart-adapters
+examples/self-improving-agent/scripts/exo-service-guardian restart-scheduler
+examples/self-improving-agent/scripts/exo-service-guardian restart-all --build
 ```
 
 Save local launch settings for later restarts with:
 
 ```bash
-exo/scripts/exo-service-guardian configure
+examples/self-improving-agent/scripts/exo-service-guardian configure
 ```
 
 The service guardian manages only the scheduler and adapter runners. Start or
-reconnect an interactive REPL with `./exo.sh`.
+reconnect an interactive REPL with `./examples/self-improving-agent/exo.sh`.
 
 Exo can call `rebuild_and_restart_exo` after changing itself. That narrow tool
 validates and builds Exo, then hands a restart to the guardian after a short
@@ -104,14 +104,14 @@ the guardian CLI commands above for status, logs, and targeted service control.
 Detached restart output is written to
 `.exo/exo-service-guardian-actions.log`.
 
-When `./exo.sh --control` is running, it also acts
+When `./examples/self-improving-agent/exo.sh --control` is running, it also acts
 as the foreground REPL supervisor. Guardian builds write
 `.exo/exo-control.restart`; the control wrapper sees that marker, restarts only
 the child `exo run`, and keeps your terminal open.
 
 ## Setting up the identity
 
-`exo/prompts/me.md` is the committed, generic Exo identity
+`examples/self-improving-agent/prompts/me.md` is the committed, generic Exo identity
 prompt. It's best to keep this high level, and not specific to any given
 instance or the local deployment environment.
 
@@ -120,7 +120,7 @@ it as an additional developer prompt when it exists, and `.exo` is ignored by
 git. To create it interactively:
 
 ```bash
-./exo.sh setup-profile
+./examples/self-improving-agent/exo.sh setup-profile
 ```
 
 The script asks for the user's name and any extra local instructions. To use a
@@ -140,7 +140,7 @@ Exo's bootstrap profile includes:
 workspace-local tools from workspace-relative directories or exact pinned Git
 commits; an install replaces any existing entry with the same stable manifest
 id. When creating a tool with sandbox `shell`, write it under
-`/workspace/exo/.exo/tool-sources/<name>` and give `manage_tool` the relative
+`/workspace/examples/self-improving-agent/.exo/tool-sources/<name>` and give `manage_tool` the relative
 path `.exo/tool-sources/<name>`, not an absolute sandbox path.
 `inspect_tools` lists or gets active and installed tools. Changes are available
 on the next model round.
@@ -185,7 +185,7 @@ when a task matches.
 
 The old self-agent adapter workers and setup prompts have been removed. Configure
 Slack in an agent definition and run it with `exo run AGENT --serve`; see the
-[Slack setup guide](../website/docs-src/adapters/slack.md). The adapter submits
+[Slack setup guide](../../website/docs-src/adapters/slack.md). The adapter submits
 turns and delivers their output. It does not use scheduler wakeups or
 `send_adapter_message`.
 
@@ -203,13 +203,13 @@ the cli. The following command will create a REPL with the agent and a
 persistent sandbox that will be durable across conversations
 
 ```bash
-./exo.sh --pull-sandbox
+./examples/self-improving-agent/exo.sh --pull-sandbox
 ```
 
 If you want a conversation to have its own sandbox, use `sandboxScope: "conversation"`:
 
 ```bash
-./exo.sh --conversation isolated-dev --sandbox-scope conversation
+./examples/self-improving-agent/exo.sh --conversation isolated-dev --sandbox-scope conversation
 exo thread --harness exo update exo-agent isolated-dev --sandbox-scope conversation
 ```
 

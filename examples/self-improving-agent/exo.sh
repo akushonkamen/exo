@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 
 # setup.sh installs node/pnpm/rust through mise; make its shims available even
 # in shells where mise was never activated (the harness runner spawns node).
@@ -27,7 +27,7 @@ LOCAL_PROMPT_FILE="${EXO_LOCAL_PROMPT_FILE:-$ROOT_DIR/.exo/exo-profile.md}"
 SANDBOX_IMAGE="${EXO_SANDBOX_IMAGE:-ubuntu:24.04}"
 PROVIDER="${EXO_PROVIDER:-}"
 SELF_REPO_MOUNT_PATH="${EXO_REPO:-/workspace/exo}"
-SELF_MAP_PATH="$SELF_REPO_MOUNT_PATH/exo/SELF.md"
+SELF_MAP_PATH="$SELF_REPO_MOUNT_PATH/examples/self-improving-agent/SELF.md"
 AGENT_CLI_MOUNT_ROOT="${EXO_AGENT_CLI_ROOT:-}"
 AGENT_CLI_MOUNT_PATH="${EXO_AGENT_CLI_MOUNT:-/agent-cli}"
 NETWORKING="${EXO_NETWORKING:-enabled}"
@@ -55,15 +55,15 @@ export EXO_LOCAL_PROMPT_FILE="$LOCAL_PROMPT_FILE"
 usage() {
   cat <<'EOF'
 Usage:
-  ./exo.sh [options]
-  ./exo.sh list
-  ./exo.sh delall all
-  ./exo.sh fresh
-  ./exo.sh stop-all
-  ./exo.sh build
-  ./exo.sh write-profile
-  ./exo.sh setup-profile
-  ./exo.sh setup-sandbox
+  ./examples/self-improving-agent/exo.sh [options]
+  ./examples/self-improving-agent/exo.sh list
+  ./examples/self-improving-agent/exo.sh delall all
+  ./examples/self-improving-agent/exo.sh fresh
+  ./examples/self-improving-agent/exo.sh stop-all
+  ./examples/self-improving-agent/exo.sh build
+  ./examples/self-improving-agent/exo.sh write-profile
+  ./examples/self-improving-agent/exo.sh setup-profile
+  ./examples/self-improving-agent/exo.sh setup-sandbox
 
 Default behavior starts the canonical stack: it creates or reuses an Exo
 agent and conversation with a Docker sandbox, repo self-map mount,
@@ -218,7 +218,7 @@ configure_guardian_for_current_launch() {
     return
   fi
 
-  "$ROOT_DIR/exo/scripts/exo-service-guardian" configure \
+  "$ROOT_DIR/examples/self-improving-agent/scripts/exo-service-guardian" configure \
     --env-file "$ENV_FILE" \
     --exo-bin "$EXO_BIN" \
     --scheduler-bin "$SCHEDULER_BIN" \
@@ -234,7 +234,7 @@ build_exo() {
 build_exo_scheduler() {
   echo "Building Exo scheduler runner..."
   (cd "$ROOT_DIR" && CARGO_TARGET_DIR=target cargo build \
-    --manifest-path exo/scheduler-runner/Cargo.toml \
+    --manifest-path examples/self-improving-agent/scheduler-runner/Cargo.toml \
     --ignore-rust-version)
 }
 
@@ -264,8 +264,8 @@ scheduler_source_newer_than() {
   local target="$1"
   local path
   for path in \
-    "$ROOT_DIR/exo/scheduler-runner/Cargo.toml" \
-    "$ROOT_DIR/exo/scheduler-runner/src"/*.rs; do
+    "$ROOT_DIR/examples/self-improving-agent/scheduler-runner/Cargo.toml" \
+    "$ROOT_DIR/examples/self-improving-agent/scheduler-runner/src"/*.rs; do
     if [[ -e "$path" && "$path" -nt "$target" ]]; then
       return 0
     fi
@@ -513,8 +513,8 @@ write_launch_environment() {
   if [[ ! "$SELF_REPO_MOUNT_PATH" = /* ]]; then
     die "self repo mount path must be absolute: $SELF_REPO_MOUNT_PATH"
   fi
-  if [[ ! -f "$ROOT_DIR/exo/SELF.md" ]]; then
-    die "Exo self map is missing: exo/SELF.md"
+  if [[ ! -f "$ROOT_DIR/examples/self-improving-agent/SELF.md" ]]; then
+    die "Exo self map is missing: examples/self-improving-agent/SELF.md"
   fi
 
   if [[ -n "$AGENT_CLI_MOUNT_ROOT" ]]; then
@@ -1050,7 +1050,7 @@ while [[ $# -gt 0 ]]; do
     --self-repo-mount)
       SELF_REPO_MOUNT_PATH="${2:-}"
       [[ -n "$SELF_REPO_MOUNT_PATH" ]] || die "--self-repo-mount requires a value"
-      SELF_MAP_PATH="$SELF_REPO_MOUNT_PATH/exo/SELF.md"
+      SELF_MAP_PATH="$SELF_REPO_MOUNT_PATH/examples/self-improving-agent/SELF.md"
       shift 2
       ;;
     --agent-cli-mount)

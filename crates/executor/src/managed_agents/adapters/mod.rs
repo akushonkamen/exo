@@ -26,6 +26,8 @@ use store::{
 };
 use tokio_util::sync::CancellationToken;
 
+const INVALID_PROGRESS_RETRY_LIMIT: u32 = 5;
+
 #[derive(Clone)]
 pub(crate) struct Deployment {
     pub id: String,
@@ -815,21 +817,16 @@ impl AdapterService {
                     chunks.push(progress::Progress::status("Waiting for your approval"));
                     approvals.push((turn, approval));
                 }
-                Some(Some(Ok(event))) => chunks.extend(progress.event(event)?),
-                Some(Some(Err(error))) => {
-                    if error.is::<crate::turn_queue::TurnFailed>() {
-                        inbox.error = Some(InboxError::TurnFailed(error.to_string()));
-                        chunks.push(progress::Progress::status("Turn failed"));
-                        inbox.complete = true;
-                    } else {
-                        tracing::warn!(input = %inbox.message.id, %error, "adapter observer disconnected; turn retained for recovery");
-                        // Advancing the committed cursor counts as progress;
-                        // retrying the same malformed event does not.
-                        if checkpoint > inbox.cursor {
-                            inbox.observer_retry = None;
-                        }
-                        chunks.extend(self.reconnecting(inbox));
+                Some(Some(Ok(event))) => match progress.event(event) {
+                    Ok(updates) => chunks.extend(updates),
+                    Err(error) => {
+                        chunks.extend(self.observer_error(inbox, checkpoint, error));
+                        connected = false;
+                        break;
                     }
+                },
+                Some(Some(Err(error))) => {
+                    chunks.extend(self.observer_error(inbox, checkpoint, error));
                     connected = false;
                     break;
                 }
@@ -888,6 +885,10 @@ impl AdapterService {
             Some(InboxError::TurnFailed(error)) => {
                 (format!("Turn failed: {error}"), Some("Turn failed"))
             }
+            Some(InboxError::InvalidProgress) => (
+                "Unable to show turn updates. The turn remains saved in Exo; check the server logs.".into(),
+                Some("Updates unavailable"),
+            ),
             None => (
                 inbox
                     .final_text
@@ -903,6 +904,38 @@ impl AdapterService {
             .expect("adapter streams poisoned")
             .remove(&stream_key(deployment, inbox));
         self.queue_status(deployment, inbox, String::new()).await
+    }
+
+    fn observer_error(
+        &self,
+        inbox: &mut Inbox,
+        checkpoint: Option<exoharness::EventId>,
+        error: anyhow::Error,
+    ) -> Vec<SlackStreamChunk> {
+        if error.is::<crate::turn_queue::TurnFailed>() {
+            inbox.error = Some(InboxError::TurnFailed(error.to_string()));
+            inbox.complete = true;
+            return vec![progress::Progress::status("Turn failed")];
+        }
+        // Advancing the committed cursor counts as progress;
+        // retrying the same malformed event does not.
+        if checkpoint > inbox.cursor {
+            inbox.observer_retry = None;
+        }
+        let chunks = self.reconnecting(inbox);
+        if error.is::<serde_json::Error>()
+            && inbox
+                .observer_retry
+                .as_ref()
+                .is_some_and(|retry| retry.attempts >= INVALID_PROGRESS_RETRY_LIMIT)
+        {
+            tracing::error!(input = %inbox.message.id, thread = ?inbox.thread, turn = ?inbox.turn, %error, "adapter progress is malformed; automatic observation stopped, turn retained");
+            inbox.error = Some(InboxError::InvalidProgress);
+            inbox.complete = true;
+            return Vec::new();
+        }
+        tracing::warn!(input = %inbox.message.id, %error, "adapter observer disconnected; turn retained for recovery");
+        chunks
     }
 
     fn reconnecting(&self, inbox: &mut Inbox) -> Vec<SlackStreamChunk> {

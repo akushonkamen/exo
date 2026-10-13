@@ -58,7 +58,7 @@ callable on the next model round.
 Local source paths are resolved on the host relative to the workspace root.
 Because the agent's shell runs in a sandbox where the workspace is mounted at
 `/workspace/exo`, an agent authors a tool under
-`/workspace/exo/.exo/tool-sources/<name>` and installs it with the relative
+`/workspace/examples/self-improving-agent/.exo/tool-sources/<name>` and installs it with the relative
 path `.exo/tool-sources/<name>`. Absolute sandbox paths such as `/tmp/...` are
 rejected because they do not exist on the host.
 
@@ -88,7 +88,7 @@ Profiles are curated tool sets, not trust levels:
 - **practical** (default) — bootstrap plus scheduler, adapter, sandbox
   recovery, introspection, memory, todo, skill, and web tools.
 
-Select a profile with `./exo.sh --profile bootstrap|practical` or the
+Select a profile with `./examples/self-improving-agent/exo.sh --profile bootstrap|practical` or the
 `EXO_PROFILE` environment variable.
 
 ## Adapters
@@ -127,7 +127,7 @@ install it through the registry, and call it.
 Build and install a managed tool named `word_stats`.
 
 1. Use shell to create the source directory
-   /workspace/exo/.exo/tool-sources/word-stats containing:
+   /workspace/examples/self-improving-agent/.exo/tool-sources/word-stats containing:
    - exo-tool.json with schemaVersion 1, id "tool:local/word-stats",
      and module "tool.ts"
    - tool.ts default-exporting a Tool (type-only imports from
