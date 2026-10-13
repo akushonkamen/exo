@@ -318,9 +318,10 @@ impl HarnessEventHandler for HarnessEvents {
 pub(crate) fn turn_stream(
     events: exoharness::EventStream,
     turn: exoharness::TurnRecord,
+    failure: Option<String>,
 ) -> impl futures::Stream<Item = Result<crate::ExecutionStreamEvent>> + Send {
     use crate::ExecutionStreamEvent as Output;
-    futures::stream::try_unfold(Some((events, None, None)), move |state| {
+    futures::stream::try_unfold(Some((events, failure, None)), move |state| {
         let turn = turn.clone();
         async move {
             let Some((mut events, mut failure, checkpoint)) = state else {
@@ -367,7 +368,7 @@ pub(crate) fn turn_stream(
                     }
                     EventData::TurnEnded => {
                         if let Some(message) = failure {
-                            bail!(message);
+                            return Err(crate::turn_queue::TurnFailed(message).into());
                         }
                         return Ok(Some((
                             Output::Completed(crate::SendResult {

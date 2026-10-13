@@ -17,14 +17,12 @@ Use this map before changing Exo itself.
 - `exo/scripts/exo-service-guardian`: host-side build and service control.
 - `./exo.sh`: local startup script for REPL, scheduler, adapters, sandbox, and repo mount.
 - `exo/tools/sandbox-tools.ts`: sandbox snapshot and rewind tool definitions.
-- `exo/tools/introspection-tools.ts`: `list_adapter_events` and `list_conversation_events` introspection tools.
+- `exo/tools/introspection-tools.ts`: `list_conversation_events` introspection tool.
 - `exo/tools/host-tools.ts`: `registerHostTool` helper that bridges TypeScript tool definitions to Rust execution.
 - `exo/tools/scheduler-tools.ts`: scheduled task tool definitions.
 - `exo/scheduler-runner/`: host scheduler runner binary.
-- `exo/adapters/`: adapter setup prompts and worker implementations.
-- `exo/adapters/agent-cli/`: shell entry point adapter; `exo-cli` sends prompts plus the user's working directory over a unix socket, and the message tells you which sandbox path (under the `/agent-cli` mount by default) to `cd` into.
-- `exoharness/typescript/harness/adapter-tools.ts`: model-visible adapter tool definitions.
-- `crates/executor/src/native/adapter/`: Rust adapter runtime and supervision.
+- `crates/executor/src/managed_agents/adapters/`: managed Slack connection, routing, and delivery.
+- `website/docs-src/adapters/slack.md`: Slack setup and configuration.
 - `crates/executor/src/native/harness_tool.rs`: Rust tool execution runtime (`execute_tool` match arms).
 - `crates/executor/src/native/agent_sandbox.rs`: shared agent sandbox selection.
 - `crates/executor/src/native/conversation_sandbox.rs`: conversation sandbox selection.
@@ -100,27 +98,14 @@ definition that delegates to it:
 
 ## Diagnosing Adapters and Restarts
 
-When an adapter seems quiet, broken, or recently restarted, diagnose it from
-inside the conversation before touching host services:
+`list_conversation_events` reads the canonical conversation log.
+`rebuild_and_restart_exo` records the outcome of a deferred self-update with its
+`updateId`, status, exit code, and reason. Scheduler results are available through
+`list_scheduled_tasks`.
 
-1. `list_adapters` shows each adapter's `enabled` state plus health fields
-   `last_connected_at_ms` and `last_error`.
-2. `list_adapter_events` returns the adapter's recent telemetry newest first:
-   `connected`, `disconnected`, `inbound`, `outbound`, `error`, and
-   `lifecycle` records. Filter with `eventType` and `sinceMs` to narrow in
-   (for example `eventType: "error"` after a reboot, or `sinceMs` set to the
-   restart time).
-3. `list_conversation_events` reads the canonical conversation event log,
-   which host components also write to. `host_reboot` records a planned host
-   restart with its reason; `rebuild_and_restart_exo` records whether a deferred
-   self-update finished (succeeded or failed) with its `updateId` and tool
-   reason; `adapter_runner_started` records every adapter
-   runner start (without a preceding `host_reboot` it implies a crash or
-   manual restart); `adapter_runner_draining` records a graceful shutdown
-   beginning. This is the immutable history of what happened to you — use it
-   to answer "was I restarted, when, and why?".
-4. Only ask the operator to inspect guardian logs once the event history shows
-   a host-side problem (worker crash loops, repeated disconnects, send failures).
+For Slack connection or delivery problems, ask the operator to inspect the managed
+adapter server's logs. Slack replies are delivered by the adapter, not by a tool
+called from the model. The old adapter lifecycle events are no longer emitted.
 
 ## Maintenance Rules
 

@@ -12,8 +12,8 @@ use std::sync::Arc;
 use anyhow::{Context, Result, anyhow, bail};
 use async_trait::async_trait;
 use exoharness::{
-    AgentHandle, ExoHarness, ListThreadsRequest, NewAgentRequest, NewThreadRequest,
-    ReadArtifactRequest, SessionId, ThreadHandle, Uuid7, WriteArtifactRequest,
+    AgentHandle, ArtifactVersion, ExoHarness, ListThreadsRequest, NewAgentRequest,
+    NewThreadRequest, ReadArtifactRequest, SessionId, ThreadHandle, Uuid7, WriteArtifactRequest,
 };
 use mcp::McpServerDefinition;
 use serde::{Deserialize, Serialize};
@@ -217,19 +217,29 @@ pub async fn create_agent(
 }
 
 pub async fn load_definition(agent: &dyn AgentHandle) -> Result<Option<AgentDefinition>> {
-    let Some(artifact) = agent
+    let Some(version) = definition_version(agent).await? else {
+        return Ok(None);
+    };
+    load_definition_version(agent, &version).await
+}
+
+pub async fn definition_version(agent: &dyn AgentHandle) -> Result<Option<ArtifactVersion>> {
+    Ok(agent
         .list_artifacts()
         .await?
         .into_iter()
         .filter(|artifact| artifact.path == AGENT_DEFINITION_PATH)
-        .max_by_key(|artifact| artifact.version)
-    else {
-        return Ok(None);
-    };
+        .max_by_key(|artifact| artifact.version))
+}
+
+pub async fn load_definition_version(
+    agent: &dyn AgentHandle,
+    version: &ArtifactVersion,
+) -> Result<Option<AgentDefinition>> {
     let artifact = agent
         .read_artifact(ReadArtifactRequest {
-            artifact_id: artifact.artifact_id,
-            version: Some(artifact.version),
+            artifact_id: version.artifact_id,
+            version: Some(version.version),
         })
         .await?
         .context("saved agent definition is missing")?;

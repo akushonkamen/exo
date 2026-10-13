@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use slack_morphism::prelude::{SlackStreamChunk, SlackTaskCardStatus};
 use std::collections::{BTreeMap, BTreeSet};
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub(super) struct Progress {
     tools: BTreeMap<String, String>,
     running: BTreeSet<String>,
@@ -164,12 +164,12 @@ impl Progress {
         result
     }
 
-    pub fn finish(&mut self, text: &str, failed: bool) -> Vec<SlackStreamChunk> {
+    pub fn finish(&mut self, text: &str, failure: Option<&str>) -> Vec<SlackStreamChunk> {
         let mut chunks = self.message(text);
         chunks.push(task(
             "exo-status",
-            if failed { "Turn failed" } else { "Finished" },
-            if failed {
+            failure.unwrap_or("Finished"),
+            if failure.is_some() {
                 SlackTaskCardStatus::Error
             } else {
                 SlackTaskCardStatus::Complete

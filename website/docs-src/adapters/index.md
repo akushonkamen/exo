@@ -1,12 +1,12 @@
 ---
 title: Adapters
-description: Connect an agent to Slack, Discord, WhatsApp, Signal, or IRC.
+description: Connect an agent to Slack.
 ---
 
 # Adapters
 
 ::: info Under construction
-Slack is implemented for local servers. The other adapters and hosted deployment are planned.
+Slack is implemented for local servers. Hosted deployment is planned.
 :::
 
 Adapters let you talk to an agent from a messaging app. They submit messages to
@@ -48,10 +48,6 @@ adapters:
 ## Setup
 
 - [Slack](slack): a Slack app using Socket Mode or a public HTTP endpoint.
-- [Discord](discord): a bot connected through Discord's Gateway.
-- [WhatsApp](whatsapp): link an account by scanning a QR code.
-- [Signal](signal): link an account using `signal-cli`.
-- [IRC](irc): connect a bot to a network and channel.
 
 Each page describes the required credentials, configuration, and how chats map
 to threads. The first implementation covers text messages; media support follows
@@ -64,10 +60,6 @@ Exo reads that vault to connect the adapter, without attaching it to agent threa
 Slack turns use `global`. Set `use_sender_vault: true` to also use the submitter's
 associated vault for each turn. The adapter's connection vault stays separate.
 See [Vaults](../architecture/vaults) for those credentials.
-
-WhatsApp and Signal use linked-device profiles instead of bot tokens. Exo keeps
-those profiles in private adapter state on the runtime host, outside the agent's
-sandbox. IRC can connect without a credential when the network permits it.
 
 ## Identity
 
@@ -99,7 +91,7 @@ local vaults are not uploaded with the definition. See
 
 `exo run FILE_OR_AGENT --serve` starts that agent's adapters alongside its HTTP API.
 `exo run --serve` serves the whole local provider. Keep the provider's state when
-restarting so conversation mappings and linked-device profiles survive.
+restarting so conversation mappings survive.
 
 Removing an adapter from the definition stops its connection and preserves its
 Exo threads. A connection failure is shown in server logs, and Exo reconnects.

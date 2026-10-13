@@ -17,6 +17,7 @@ pub struct SlackConnection {
     client: Arc<SlackHyperClient>,
     token: SlackApiToken,
     team: SlackTeamId,
+    enterprise: Option<SlackEnterpriseId>,
     user: SlackUserId,
     app: String,
     socket: Mutex<
@@ -47,6 +48,14 @@ struct ChannelPrivacy {
     is_mpim: Option<bool>,
 }
 
+// auth.test includes the installation's enterprise ID, which the SDK omits.
+#[derive(Deserialize)]
+struct AuthResponse {
+    #[serde(flatten)]
+    auth: SlackApiAuthTestResponse,
+    enterprise_id: Option<SlackEnterpriseId>,
+}
+
 // The SDK omits Slack's custom loading text from its setStatus request.
 #[derive(Serialize, Deserialize)]
 pub(super) struct ThreadStatusRequest {
@@ -74,6 +83,20 @@ pub(super) fn initialize_tls() -> Result<()> {
 }
 
 impl SlackConnection {
+    fn internal_user(&self, user: &SlackUser) -> Result<bool> {
+        if let (Some(enterprise), Some(member)) = (&self.enterprise, &user.enterprise_user)
+            && member.enterprise_id == *enterprise
+        {
+            return Ok(true);
+        }
+        Ok(user
+            .team_id
+            .as_ref()
+            .context("Slack sender workspace is unavailable")?
+            == &self.team
+            && user.flags.is_stranger != Some(true))
+    }
+
     pub async fn connect(
         service: &Arc<AdapterService>,
         deployment: &str,
@@ -99,7 +122,17 @@ impl SlackConnection {
                 .into(),
         );
         let session = client.open_session(&token);
-        let auth = session.auth_test().await?;
+        let AuthResponse {
+            auth,
+            enterprise_id,
+        } = session
+            .http_session_api
+            .http_get(
+                "auth.test",
+                &Vec::<(&str, Option<&str>)>::new(),
+                Some(&slack_morphism::api::AUTH_TEST_SPECIAL_LIMIT_RATE_CTL),
+            )
+            .await?;
         let bot = auth
             .bot_id
             .as_ref()
@@ -113,6 +146,7 @@ impl SlackConnection {
             client: client.clone(),
             token,
             team: auth.team_id,
+            enterprise: enterprise_id,
             user: auth.user_id,
             app: bot_info.bot.app_id,
             socket: Mutex::new(None),
@@ -224,7 +258,7 @@ impl SlackConnection {
             return Ok(());
         }
         let session = self.client.open_session(&self.token);
-        let (direct, external) = if channel.0.starts_with('D') {
+        let (direct, mut external) = if channel.0.starts_with('D') {
             (true, false)
         } else {
             let privacy: ChannelPrivacyResponse = session
@@ -236,7 +270,13 @@ impl SlackConnection {
                 )
                 .await?;
             if privacy.channel.is_im == Some(true) || privacy.channel.is_mpim == Some(true) {
-                (true, false)
+                (
+                    true,
+                    privacy
+                        .channel
+                        .is_ext_shared
+                        .context("Slack DM shared status is unavailable")?,
+                )
             } else {
                 let shared = privacy
                     .channel
@@ -248,6 +288,25 @@ impl SlackConnection {
                 (false, shared)
             }
         };
+        let sender_info = if direct {
+            let info = session
+                .users_info(&SlackApiUsersInfoRequest::new(sender.clone()))
+                .await?;
+            external |= !self.internal_user(&info.user)?;
+            Some(info)
+        } else {
+            None
+        };
+        if external
+            && !(self.config.allow_slack_connect
+                && self
+                    .config
+                    .allowed_channels
+                    .as_ref()
+                    .is_some_and(|channels| channels.contains(&channel.0)))
+        {
+            return Ok(());
+        }
         if direct {
             if !self.config.direct_messages {
                 return Ok(());
@@ -302,16 +361,20 @@ impl SlackConnection {
                 .needs_slack_email(&self.team.0, &sender.0)
                 .await?
             {
-                match session
-                    .users_info(&SlackApiUsersInfoRequest::new(sender.clone()))
-                    .await
-                {
+                let info = match sender_info {
+                    Some(info) => Ok(info),
+                    None => {
+                        session
+                            .users_info(&SlackApiUsersInfoRequest::new(sender.clone()))
+                            .await
+                    }
+                };
+                match info {
                     Ok(info)
-                        if info.user.team_id.as_ref() == Some(&self.team)
+                        if self.internal_user(&info.user)?
                             && info.user.flags.is_bot != Some(true)
                             && info.user.flags.is_restricted != Some(true)
-                            && info.user.flags.is_ultra_restricted != Some(true)
-                            && info.user.flags.is_stranger != Some(true) =>
+                            && info.user.flags.is_ultra_restricted != Some(true) =>
                     {
                         email = info
                             .user
@@ -371,7 +434,7 @@ impl SlackConnection {
         }
         Ok(())
     }
-    pub async fn send(&self, message: &Outbox) -> Result<Option<String>> {
+    pub(super) async fn send(&self, message: &Outbox) -> Result<Option<String>> {
         let session = self.client.open_session(&self.token);
         let content = match &message.kind {
             DeliveryKind::Stream {

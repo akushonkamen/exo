@@ -5,7 +5,13 @@ use exoharness::{
     vault::{VaultHandle, VaultId},
 };
 use serde::{Deserialize, Serialize};
-use std::{collections::BTreeMap, sync::Arc};
+use std::{
+    collections::BTreeMap,
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
+};
 use tokio::sync::Mutex;
 
 pub(super) const STATE_SECRET: &str = "exo-server-state";
@@ -67,6 +73,7 @@ pub(super) struct Store {
     vault: Arc<dyn VaultHandle>,
     secret: SecretId,
     pub state: Mutex<State>,
+    revision: AtomicU64,
     pub enrolled: tokio::sync::Notify,
 }
 
@@ -129,6 +136,7 @@ impl Store {
             vault,
             secret,
             state: Mutex::new(state),
+            revision: AtomicU64::new(0),
             enrolled: tokio::sync::Notify::new(),
         };
         {
@@ -169,6 +177,7 @@ impl Store {
             vault,
             secret: location.secret,
             state: Mutex::new(serde_json::from_str(&value)?),
+            revision: AtomicU64::new(0),
             enrolled: tokio::sync::Notify::new(),
         }))
     }
@@ -213,6 +222,7 @@ impl Store {
                 vault,
                 secret: secret.id,
                 state: Mutex::new(serde_json::from_str(&value)?),
+                revision: AtomicU64::new(0),
                 enrolled: tokio::sync::Notify::new(),
             };
             store.publish(harness).await?;
@@ -237,6 +247,7 @@ impl Store {
             vault,
             secret,
             state: Mutex::new(state),
+            revision: AtomicU64::new(0),
             enrolled: tokio::sync::Notify::new(),
         };
         store.publish(harness).await?;
@@ -244,16 +255,32 @@ impl Store {
     }
 
     pub async fn refresh(&self) -> Result<()> {
+        let revision = self
+            .vault
+            .list_secrets()
+            .await?
+            .into_iter()
+            .find(|secret| secret.id == self.secret)
+            .context("provider identity state is missing")?
+            .revision;
+        if revision <= self.revision.load(Ordering::Acquire) {
+            return Ok(());
+        }
         let mut state = self.state.lock().await;
+        if revision <= self.revision.load(Ordering::Acquire) {
+            return Ok(());
+        }
         let Some(Secret::Key { value }) = self.vault.get_secret(&self.secret).await? else {
             anyhow::bail!("provider identity state is missing");
         };
         *state = serde_json::from_str(&value)?;
+        self.revision.store(revision, Ordering::Release);
         Ok(())
     }
 
     pub async fn save(&self, state: &State) -> Result<()> {
-        self.vault
+        let metadata = self
+            .vault
             .update_secret(
                 &self.secret,
                 Secret::Key {
@@ -262,15 +289,17 @@ impl Store {
                 .into(),
             )
             .await?;
+        self.revision.store(metadata.revision, Ordering::Release);
         Ok(())
     }
 
     pub async fn enroll(
         &self,
-        identity: Identity,
+        mut identity: Identity,
         config: &AuthConfig,
         harness: &dyn ExoHarness,
     ) -> Result<Principal> {
+        identity.email = identity.email.trim().to_ascii_lowercase();
         ensure!(
             config.admitted(&identity.email),
             "this identity is not admitted to this server"
@@ -279,7 +308,7 @@ impl Store {
         if let Some(principal) = stored
             .principals
             .values_mut()
-            .find(|p| p.email == identity.email)
+            .find(|p| p.email.eq_ignore_ascii_case(&identity.email))
         {
             if principal.issuer.is_empty() && principal.subject.is_empty() {
                 principal.issuer = identity.issuer;

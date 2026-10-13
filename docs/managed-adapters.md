@@ -42,16 +42,12 @@ are specific to the type, with snake_case field names and no generic `config` or
 `initialization` object. Use a serde enum tagged by `type`, with typed variant
 fields and rejection of unknown fields.
 
-First types: Slack, Discord, WhatsApp, Signal, and IRC. Slack and Discord require
-an explicit `vault`. Slack supports `transport: socket` (the default) and
+Slack requires an explicit `vault` and supports `transport: socket` (the default) and
 `transport: http`. Both use `bot-token`; Socket Mode also requires `app-token`,
-while HTTP requires `signing-secret`. Discord uses `bot-token`. There is no fallback to `global`.
+while HTTP requires `signing-secret`. There is no fallback to `global`.
 Slack's `use_sender_vault` defaults to `false`. When enabled, each turn uses
 `global` plus the sender's associated private vault, if available. It does not
 change conversation routing or grant access to the adapter's own vault.
-WhatsApp and Signal authenticate by linking a device and persist their private
-account profiles in adapter state. They do not need an empty vault. IRC requires
-a vault only when using a password, stored as `password`.
 
 Slack HTTP is served by the same HTTP server as the managed-agent API, started by
 `exo run --serve`. It uses the server's bind address and port. Adapter definitions
@@ -120,10 +116,8 @@ named vault. Do not resolve them through a thread's attached vaults. Reject miss
 secrets before connecting, with a useful setup error. A token refresh or replacement
 should reconnect without requiring an agent-definition change.
 
-Workers run as trusted host processes. Start them with an explicit environment
-containing their configuration, state directory, required runtime settings, and
-adapter credentials. Do not inherit unrelated model keys or user secrets. Bot
-credentials and pairing profiles are never mounted into agent sandboxes.
+The Slack connection runs on the provider's host. Bot credentials are never mounted
+into agent sandboxes or included in the sender's execution context.
 
 ## Identity
 
@@ -328,8 +322,7 @@ promote that input into private credential access.
    to the deployment, account, and provider message ID.
 2. Acknowledge external receipt after persistence. Acknowledge Socket Mode envelopes
    and HTTP events/interactions within Slack's deadline; do not wait for the model.
-   Socket Mode uses the worker bridge with an explicit acknowledgement back to
-   the worker; HTTP returns its acknowledgement directly. Handle HTTP
+   Socket Mode acknowledges through its SDK; HTTP returns its acknowledgement directly. Handle HTTP
    URL-verification challenges without admitting turns.
 3. Resolve the mapped thread and submit through the managed turn queue using that
    idempotency key and resolved caller context. Persist the returned thread/session/turn
@@ -348,7 +341,6 @@ Transport acknowledgements confirm durable acceptance, not successful execution.
 For HTTP, verify Slack signatures over the original request body and reject stale
 timestamps before accepting events or interactions, following Slack's
 [request verification](https://docs.slack.dev/authentication/verifying-requests-from-slack/).
-Move these checks from the existing HTTP worker into the built-in server handler.
 The webhook authenticates with the selected deployment's Slack signing secret,
 rather than an Exo bearer token; retain normal API authentication on other routes.
 Reject requests for adapters outside the server's scope or with a different
@@ -369,8 +361,9 @@ messages, and completion. Normalize these semantics across Codex, Claude Code,
 and Pi at the runtime boundary; do not interpret a harness's private SDK objects
 in the adapter or query its event history to recover an answer.
 
-Queue output with deterministic IDs derived from the turn/event, destination, and
-chunk index. Persist the outbox entries before advancing the observer cursor.
+Queue approvals with deterministic IDs. Commit streaming output, its renderer state,
+and its observer cursor together in the same outbox object. Restore that receipt
+before reconnecting if the separate inbox save was interrupted.
 The runtime resumes a disconnected stream from its saved checkpoint. Resuming
 must neither rerun a completed turn nor enqueue its answer twice. Split long
 answers using each transport's limits and formatting rules.
@@ -403,50 +396,30 @@ tools. Report an unsupported interaction through the existing tool failure path,
 rather than leaving the turn waiting indefinitely. Other transports need an
 explicit approval interaction before agents requiring approvals can use them.
 
-## Replacement plan
-
-Preserve transport knowledge, reconnect handling, message parsing, and useful
-outbox tests. Replace the orchestration that depends on self-agent wakeups:
-
-- Change `AgentFrontmatter.adapters` in `crates/managed-agents/src/lib.rs` from
-  attachment names to typed definitions.
-- Replace `configure_adapters` in `crates/cli/src/serve.rs` and remove
-  `--adapters-file`. Do not create an unused `adapter-*` root thread.
-- Replace the wakeup/prompt path in `crates/executor/src/native/adapter/runtime.rs`
-  with managed turn admission and event observation. Keep scheduler behavior out
-  of this implementation.
-- Extend or replace `store.rs` with inbox, route, cursor, and outbox records. These
-  belong to provider storage; workers keep only local connection/profile state.
-  Reuse Exoharness's storage primitives and the durable turn queue. Inbox/outbox
-  recovery needs explicit commit ordering; do not assume multi-record transactions.
-- Retain the JSONL worker boundary in `worker.rs`, but make messages typed and add
-  durable-receipt acknowledgements. Support both Slack transports: use the official
-  [Socket Mode SDK](https://docs.slack.dev/tools/node-slack-sdk/socket-mode/) for
-  sockets. Move HTTP signature verification, challenge handling, and interaction
-  parsing from the current worker into the managed-agent server's built-in webhook
-  routes. The HTTP transport does not start another listener.
-- Move the retained external transport workers out of the self-agent's `exo/`
-  tree, into `adapters/<type>/`. Remove the agent-cli and ExoChat workers from the
-  new catalog; terminal and HTTP clients already have their own entry points.
-- Delete the model-facing adapter factories, management tools, and
-  `send_adapter_message` from `native/adapter/tools.rs`,
-  `exoharness/typescript/harness/adapter-tools.ts`, and their registry wiring when
-  replacing the runtime. Remove legacy setup scripts and instructions that depend
-  on those tools. Preserve archived docs as historical material.
-
-No live code is removed by this design-only pass. The replacement should remove
-the old path as part of the first working implementation, rather than add a second
-runtime or compatibility schema.
-
 ## Implementation status
 
 Slack's local implementation uses `slack-morphism` for its Web API, signatures, Socket Mode, and Block Kit.
 The core is in `crates/executor/src/managed_agents/adapters/`; it submits through the existing turn queue
 and persists its inbox, routes, caller authorities, and outbox in provider storage. Identity associations
-reuse the protected provider identity store. Other transports remain unported; retain their TypeScript SDK
-workers for a later JSONL bridge. Hosted deployment is also still planned.
+reuse the protected provider identity store. Other transports remain unported; their TypeScript SDKs
+are options for a future bridge. The obsolete self-agent workers have been removed.
+Hosted deployment is also still planned.
 
 ## Implementation plan
+
+### Performance follow-up
+
+- Replace the startup scan of historical inbox, outbox, and decision records with
+  a durable pending index. Compact completed delivery payloads while preserving
+  callback deduplication and turn receipts; do not delete those guarantees to prune
+  history.
+- Replace periodic agent/artifact/vault enumeration with provider change
+  notifications or version lookups. A failed refresh must retain the running
+  deployment until a successful read confirms its removal.
+- Reduce storage reads in access checks with explicit invalidation for agent,
+  vault, and identity changes. Cached access must still reject revoked grants.
+
+### Additional transports
 
 1. Typed inline definitions, deployment reconciliation, bot credential provisioning,
    and adapter admission policies.

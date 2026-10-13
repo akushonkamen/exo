@@ -3,8 +3,8 @@
 Exo is a persistent agent built on Exo designed to be helpful wherever
 there is a task to do from a computer. It supports task scheduling, a full
 sandbox where it can install its own tools and integrations, and right now
-supports ExoChat, IRC, WhatsApp, Signal, Discord, and a shell CLI (`exo-cli`) out of
-the box.
+supports an interactive CLI. Slack uses the managed adapter; see
+[the Slack setup guide](../website/docs-src/adapters/slack.md).
 
 ## Quickstart
 
@@ -38,15 +38,7 @@ reply. You can rerun this or edit the file directly at any time.
 
 This builds the `exo` binary, creates the agent and a `dev` conversation, pulls
 the Docker sandbox image, mounts this repo at `/workspace/exo`, starts the
-scheduler and adapter runner, sets up the ExoChat adapter, prints a browser
-chat URL using the hosted control plane at `https://exoharness.ai`, and drops
-you into a REPL.
-
-For developer testing with IRC and Discord instead, use the `dev` template:
-
-```bash
-./exo.sh fresh --template dev
-```
+scheduler and managed adapter server, and drops you into a REPL.
 
 4. Chat with Exo in the REPL:
 
@@ -54,27 +46,7 @@ For developer testing with IRC and Discord instead, use the `dev` template:
 dev> hello! what can you do?
 ```
 
-5. Talk to it from any shell. Put the CLI on your PATH once:
-
-```bash
-ln -s "$PWD/exo/scripts/exo-cli" ~/bin/exo-cli
-```
-
-Relaunch the stack with your workspace mounted:
-
-```bash
-./exo.sh --agent-cli-mount "$HOME/projects"
-```
-
-Keep that flag on subsequent launches. Then from any directory under `~/projects`:
-
-```bash
-cd ~/projects/some-repo
-exo-cli "set up a simple node environment in this directory"
-```
-
-The agent has read-write access to the directory you call it from and replies
-to your terminal when it finishes.
+You can also resume the same thread from another terminal with `exo run`.
 
 Notes:
 
@@ -83,56 +55,6 @@ Notes:
   `./exo.sh`
 - For a minimal start without Docker defaults or adapter setup:
   `./exo.sh --template minimal --pull-sandbox`
-
-## Setting up Discord
-
-Exo can connect to Discord through the library Discord adapter. The short
-path is:
-
-1. Create a Discord application and bot in the
-   [Discord Developer Portal](https://discord.com/developers/applications).
-2. In the bot settings, enable **Message Content Intent**.
-3. Invite the bot to your server with at least these bot permissions:
-   **View Channels**, **Send Messages**, **Read Message History**, and
-   **Attach Files** if you want Exo to send images or other attachments.
-4. Store the bot token as the secret expected by the setup prompt:
-
-   ```bash
-   export DISCORD_BOT_TOKEN="..."
-   ./target/debug/exo vault secret create global discord-bot-token --token-env DISCORD_BOT_TOKEN
-   ```
-
-5. Create or confirm the adapter:
-
-   ```bash
-   ./exo.sh --setup discord
-   ```
-
-   If you are starting from scratch for adapter development, you can include
-   Discord in the developer canonical setup:
-
-   ```bash
-   ./exo.sh fresh --template dev
-   ```
-
-6. Copy a Discord channel id for testing. In Discord, enable **User Settings** >
-   **Advanced** > **Developer Mode**, then right-click the target channel and
-   choose **Copy Channel ID**.
-
-To test outbound messages, ask Exo:
-
-```text
-Send "hello from Exo" to Discord using adapter <adapter-id> and target <channel-id>.
-```
-
-To test inbound wakeups, send a normal message in a channel the bot can read.
-The default setup uses `trigger: "all_messages"`, so the bot does not need to be
-mentioned. Discord attachments are forwarded too: inbound images are attached to
-the model wakeup for analysis, and outbound files can be sent with
-`send_adapter_message` attachments.
-
-For voice chat, richer attachment examples, and the full configuration surface,
-see [`adapters/discord/README.md`](./adapters/discord/README.md).
 
 ## Self Introspection
 
@@ -243,18 +165,6 @@ It also adds scheduler tools:
 `cancel_scheduled_task` disables a task and preserves its record/history.
 `delete_scheduled_task` removes the task record and stored run history.
 
-And adapter tools:
-
-- `create_adapter`
-- `list_adapters`
-- `disable_adapter`
-- `delete_adapter`
-- `send_adapter_message`
-
-`disable_adapter` stops future adapter wake-ups while preserving the adapter
-record and event history. `delete_adapter` removes the adapter record and stored
-events.
-
 And skill tools (see `../exoharness/docs/design/skills.md` for the design):
 
 - `install_skill`
@@ -273,87 +183,11 @@ when a task matches.
 
 ## Adapters
 
-Adapters are host-owned long-running runtimes for external applications. They
-are intentionally separate from scheduled sandbox commands: adapters own sockets,
-reconnect behavior, inbound message parsing, event history, and conversation
-wake-ups. Agents configure adapters with tools, and the local adapter runner
-started by `./exo.sh` keeps them connected.
-
-Exo ships with ExoChat, IRC, WhatsApp, Signal, Discord, and agent-cli adapters
-(see `adapters/agent-cli/README.md` for the shell CLI). The default canonical
-setup turns on ExoChat:
-
-```bash
-./exo.sh
-```
-
-For developer testing with IRC and Discord, use:
-
-```bash
-./exo.sh --template dev
-```
-
-To send every setup prompt before opening the REPL:
-
-```bash
-./exo.sh --setup-all
-```
-
-For a fresh control agent with a local profile prompt and all adapters:
-
-```bash
-PATH="/opt/homebrew/opt/openjdk/bin:$PATH" \
-  ./exo.sh fresh \
-  --agent exo-agent \
-  --agent-name "Exo" \
-  --conversation dev \
-  --setup-profile \
-  --setup-all
-```
-
-This will:
-
-- Prompt you for any needed adapter configuration (such as nicknames, channel/server info for IRC, or pairing for WhatsApp/Signal).
-- Write adapter configuration to `.exo/adapters/`.
-- Start the background adapter runner so the agent can receive and react to external messages in real time.
-
-The adapter runner starts by default. Use `--no-adapters` to skip it, or
-`--adapters` to force it on when an environment override disabled it.
-
-The agent spec lists its declared adapter attachments:
-
-```bash
-target/debug/exo agent get exo-agent
-```
-
-See the sections below for more details on individual adapter configuration.
-
-### IRC
-
-The first built-in adapter is IRC. It runs as a host-supervised Node.js worker
-that connects to a configured server/channel, responds to `PING`, parses
-`PRIVMSG`, and wakes the conversation when the trigger policy matches. The
-recommended trigger is `mention`, which only wakes the conversation when a
-channel message mentions the adapter nick. `all_messages` is available for
-quieter channels.
-
-### WhatsApp
-
-Exo also includes an experimental WhatsApp adapter using Baileys. The Rust
-adapter runtime owns supervision, durable events, conversation wakeups, and
-outbox draining; workers own protocol-specific sockets and parsing. When first
-run, the WhatsApp worker emits a QR pairing event into adapter history and logs;
-after pairing, Baileys auth state is stored under
-`.exo/adapters/whatsapp/<adapter-id>/auth` by default.
-
-### Signal
-
-The Signal adapter uses `signal-cli` as a linked device. If its `account` config
-is null, the worker starts `signal-cli link`, logs a QR code for the phone's
-linked-device flow, discovers the linked account with `signal-cli listAccounts`,
-then runs `signal-cli -a <account> jsonRpc`. Outbound DM targets should be
-Signal usernames with the `u:` prefix, such as `u:example.01`, unless an inbound
-wakeup provides a more precise target.
+The old self-agent adapter workers and setup prompts have been removed. Configure
+Slack in an agent definition and run it with `exo run AGENT --serve`; see the
+[Slack setup guide](../website/docs-src/adapters/slack.md). The adapter submits
+turns and delivers their output. It does not use scheduler wakeups or
+`send_adapter_message`.
 
 ## Sandbox Modes
 

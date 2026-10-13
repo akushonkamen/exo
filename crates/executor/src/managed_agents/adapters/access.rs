@@ -1,4 +1,7 @@
-use super::store::{AdapterStore, Authority, digest};
+use super::{
+    definitions::DefinitionCache,
+    store::{AdapterStore, Authority, digest},
+};
 use crate::{Runtime, remote::IdentityRegistry};
 use anyhow::{Result, ensure};
 use async_trait::async_trait;
@@ -9,33 +12,38 @@ use exoharness::{
 };
 use std::sync::Arc;
 
-pub struct AdapterPolicy {
+pub(super) struct AdapterPolicy {
     pub authority: Authority,
     pub identities: IdentityRegistry,
-    pub store: AdapterStore,
+    pub definitions: Arc<DefinitionCache>,
     pub global: VaultId,
     pub principal: String,
     pub root: Arc<dyn exoharness::ExoHarness>,
 }
 
+#[derive(Debug)]
+pub(super) struct AdapterAccessDenied;
+impl std::fmt::Display for AdapterAccessDenied {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Slack sender or channel is no longer allowed")
+    }
+}
+impl std::error::Error for AdapterAccessDenied {}
+
 #[async_trait]
 impl AccessPolicy for AdapterPolicy {
     async fn check(&self, principal: &str, scope: ResourceScope) -> Result<()> {
         ensure!(principal == self.principal, "adapter caller mismatch");
-        ensure!(
-            self.store
-                .get::<Authority>(&AdapterStore::authority(principal))
-                .await?
-                .as_ref()
-                == Some(&self.authority),
-            "adapter turn authority is unavailable"
-        );
+        // Authority is immutable and included in the caller's principal. Grants
+        // and adapter permissions are checked against their current state below.
         let agent = self
             .root
             .get_agent(&self.authority.agent)
             .await?
             .ok_or_else(|| anyhow::anyhow!("adapter agent was removed"))?;
-        let definition = exo_managed_agents::load_definition(agent.as_ref())
+        let definition = self
+            .definitions
+            .load(agent.as_ref())
             .await?
             .ok_or_else(|| anyhow::anyhow!("adapter agent definition is missing"))?;
         let config = definition
@@ -52,29 +60,36 @@ impl AccessPolicy for AdapterPolicy {
             })
             .ok_or_else(|| anyhow::anyhow!("Slack adapter was removed"))?;
         let message = &self.authority.source;
-        ensure!(
-            config
-                .allowed_users
-                .as_ref()
-                .is_none_or(|users| users.contains(&message.sender))
-                && if message.direct {
-                    config.direct_messages
-                } else {
-                    config
+        if !(config
+            .allowed_users
+            .as_ref()
+            .is_none_or(|users| users.contains(&message.sender))
+            && (!message.external
+                || (config.allow_slack_connect
+                    && config
                         .allowed_channels
                         .as_ref()
-                        .is_none_or(|channels| channels.contains(&message.channel))
-                        && (!message.external || config.allow_slack_connect)
-                },
-            "Slack sender or channel is no longer allowed"
-        );
+                        .is_some_and(|channels| channels.contains(&message.channel))))
+            && if message.direct {
+                config.direct_messages
+            } else {
+                config
+                    .allowed_channels
+                    .as_ref()
+                    .is_none_or(|channels| channels.contains(&message.channel))
+            })
+        {
+            return Err(AdapterAccessDenied.into());
+        }
         if let Some(grant) = &self.authority.grant {
-            let bot_vault =
-                exo_managed_agents::vaults::find_vault(self.root.as_ref(), &config.vault).await?;
-            ensure!(
-                config.use_sender_vault && grant.vault != bot_vault.record().id,
-                "sender vault is not permitted for this adapter"
-            );
+            let sender_vault =
+                exoharness::vault::require_vault(self.root.as_ref(), &grant.vault).await?;
+            if !config.use_sender_vault
+                || config.vault == grant.vault.to_string()
+                || config.vault == sender_vault.record().name
+            {
+                return Err(AdapterAccessDenied.into());
+            }
             self.identities.validate(grant).await?;
         }
         ensure!(
@@ -135,13 +150,21 @@ impl AccessPolicy for AdapterPolicy {
     }
 }
 
-pub async fn caller(
+pub(super) fn principal(authority: &Authority) -> Result<String> {
+    Ok(format!(
+        "adapter-{}",
+        digest(&serde_json::to_string(authority)?)
+    ))
+}
+
+pub(super) async fn caller(
     root: &Runtime,
     store: &AdapterStore,
     identities: IdentityRegistry,
+    definitions: Arc<DefinitionCache>,
     authority: Authority,
 ) -> Result<Caller> {
-    let principal = format!("adapter-{}", digest(&serde_json::to_string(&authority)?));
+    let principal = principal(&authority)?;
     store
         .put(&AdapterStore::authority(&principal), &authority)
         .await?;
@@ -154,7 +177,7 @@ pub async fn caller(
         policy: Arc::new(AdapterPolicy {
             authority,
             identities,
-            store: store.clone(),
+            definitions,
             global,
             principal: principal.clone(),
             root: root.exoharness_handle(),

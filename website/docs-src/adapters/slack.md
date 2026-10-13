@@ -45,7 +45,9 @@ adapters:
 ```
 
 Channel and user limits both apply. Slack Connect channels are rejected by default,
-even when the bot has joined them. Linking private credentials is optional; see
+even when the bot has joined them. DMs from other workspaces in the same Enterprise
+Grid organization count as internal when Slack confirms their enterprise ID.
+Linking private credentials is optional; see
 [Private credentials](#private-credentials).
 
 ## Setup
@@ -289,7 +291,7 @@ exo identity trust slack --workspace T123456
 Add `users:read.email` to the app's bot scopes, then reinstall it. The manifests
 already include `users:read`. Exo looks up the authenticated Slack sender
 and resolves their account through that trusted source. An email typed into a
-message does not select a private vault. Guest and external workspace profiles
+message does not select a private vault. Guest and external Slack Connect profiles
 aren't automatically trusted for this purpose.
 
 If you want a stricter association, optionally pin the Slack workspace/user ID:
@@ -409,7 +411,7 @@ reinstall the app, and invite it to the channel.
 | `allowed_channels` | Omitted | All eligible channels the bot has joined. A list restricts channel IDs; `[]` accepts no channel input. |
 | `allowed_users` | Omitted | All eligible Slack users, with or without private credentials. A list restricts Slack user IDs; `[]` accepts no users. |
 | `direct_messages` | `true` | Accept DMs independently of the channel allowlist. |
-| `allow_slack_connect` | `false` | Accept Slack Connect channels only when enabled and their IDs are explicitly listed in `allowed_channels`. User restrictions still apply. |
+| `allow_slack_connect` | `false` | Accept Slack Connect conversations, including DMs and group DMs, only when enabled and their IDs are explicitly listed in `allowed_channels`. User restrictions still apply. |
 
 Open the channel's details and copy the channel ID at the bottom. Omit
 `allowed_channels` to accept all eligible channels the bot has joined. To disable
@@ -442,7 +444,7 @@ the agent as well: `/exo/agent/support-analyst/adapter/slack`.
 ## Troubleshooting
 
 - Socket connection fails: check that Socket Mode is enabled and that the app token has `connections:write`.
-- Only some Socket Mode messages arrive: check that another server isn't using the same app token. Slack distributes events across active connections; run one deployment unless they share durable state. See [multiple connections](https://docs.slack.dev/apis/events-api/using-socket-mode/#using-multiple-connections).
+- Only some Socket Mode messages arrive: check that another server isn't using the same app token. Slack distributes events across active connections; run one server per app token. See [multiple connections](https://docs.slack.dev/apis/events-api/using-socket-mode/#using-multiple-connections).
 - HTTP URL won't verify: check that Socket Mode is disabled, the Exo server is running, and the public URL forwards to its webhook path.
 - HTTP requests are rejected: check the signing secret and the server clock, and make sure the proxy preserves the request body and Slack signature headers.
 - Approval buttons don't work over HTTP: check the Interactivity Request URL.

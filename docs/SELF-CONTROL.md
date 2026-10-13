@@ -43,11 +43,11 @@ Exo should always be able to inspect the code that defines its own behavior, cha
 
 The model-visible `rebuild_and_restart_exo` tool exposes one fixed self-update operation: validate and build Exo, then hand a scheduler and adapter restart to a detached guardian process so the current model turn can finish. Pass `reason` as a short free-text note describing the change being activated. On completion, the outcome is written under `.exo/guardian-updates/` and also appended to this conversation's event log as a `rebuild_and_restart_exo` host event (succeeded or failed), so `list_conversation_events` can answer whether a rebuild finished. Service status, logs, and targeted service controls stay in the operator-facing `exo/scripts/exo-service-guardian` CLI.
 
-Service restarts drain instead of killing blindly: the guardian writes a restart marker (`.exo/exo-adapters.restart` or `.exo/exo-scheduler.restart`); the runner claims the marker, finishes in-flight wakeup turns or scheduler passes, and exits on its own. A runner that never claims the marker is stopped with a process-tree kill after a short wait. Adapter workers run in their own process groups so stopping a worker also terminates the `pnpm`/`tsx`/`node` children holding the external connection. Builds also write `.exo/exo-control.restart`, which the control wrapper claims to restart only the `exo run` child without closing the user's terminal.
+The guardian restarts the managed adapter runner with SIGTERM and waits for its shutdown before starting it again. Pending inputs and replies remain in its durable inbox and outbox for recovery. Scheduler restarts still use `.exo/exo-scheduler.restart`: the scheduler claims the marker, finishes its current pass, and exits. If either service fails to stop within its grace period, the guardian stops its process tree. Builds also write `.exo/exo-control.restart`, which the control wrapper claims to restart only the `exo run` child without closing the user's terminal.
 
-Reboots are announced through the adapters: because restarts are deferred, the agent can post a "going down" message with `send_adapter_message` in the same turn that requests the restart. The guardian writes `.exo/exo-reboot-notice.json`; the fresh adapter runner claims it and sends one wakeup per adapter conversation so the agent can announce its return. Announcements queue in the durable adapter outbox and deliver when the worker reconnects. Stale notices (older than 15 minutes) are discarded.
+The managed Slack adapter does not send reboot announcements.
 
-The canonical local startup is plain `./exo.sh` (Docker provider/backend, repo self-map mount, guardian config, adapter setup prompts, control REPL — the default `--template canonical`). `./exo.sh fresh` gives the same shape from a clean agent/conversation state.
+The canonical local startup is plain `./exo.sh` (Docker provider/backend, repo self-map mount, guardian config, control REPL — the default `--template canonical`). `./exo.sh fresh` gives the same shape from a clean agent/conversation state.
 
 ## 2. Durable Memory and Identity
 
@@ -66,7 +66,10 @@ Exo's identity is its durable state. Rollback, cloning, and migration all depend
 
 The operating rules that follow: preserve `.exo` unless the user explicitly asks to delete state; never store durable memory only in the sandbox filesystem (it is the one resettable layer); put user-specific memory in the local profile and behavioral changes in checked-in prompts; and treat secrets as the one category that cannot be casually copied or recreated.
 
-**The immutable event log.** Within this inventory, the exoharness conversation event log is the append-only record that lets Exo answer "what happened to me, and what have I already tried?" — especially after rolling back sandbox state, when the filesystem no longer reflects past attempts. It captures sessions, turns, messages, tool requests and results, errors, artifact writes, and sandbox lifecycle events. Host components write into the same log as `Custom` events so host actions are part of the immutable history rather than living only in side channels: the adapter runner appends `host_reboot` when it claims a reboot notice (with the guardian's reason), `adapter_runner_started` on every start (a start without a preceding `host_reboot` implies a crash or manual restart), `adapter_runner_draining` when a graceful drain begins, and `rebuild_and_restart_exo` when a deferred self-update finishes (succeeded or failed, with `updateId`, `exitCode`, and the tool `reason`).
+**The immutable event log.** Within this inventory, the exoharness conversation event log is the append-only record that lets Exo answer "what happened to me, and what have I already tried?" — especially after rolling back sandbox state, when the filesystem no longer reflects past attempts. It captures sessions, turns, messages, tool requests and results, errors, artifact writes, and sandbox lifecycle events. Host components write into the same log as `Custom` events. A deferred
+self-update records `rebuild_and_restart_exo` with its status, `updateId`, exit code,
+and reason. Slack connection and delivery diagnostics are in the managed adapter
+server's logs; the old adapter lifecycle events are no longer emitted.
 
 The agent reads this history back with `list_conversation_events`, which defaults to lifecycle and host event kinds (sessions, errors, sandbox events, host events) and supports explicit kind filters, pagination cursors, and ordering — including the per-turn traffic kinds (`messages`, `tool_requested`, `tool_result`) when the agent needs to reconstruct exactly what a past turn did.
 
@@ -94,7 +97,9 @@ This is deliberately not embedding-based retrieval. For a small set of short fac
 Exo should be able to inspect each of its components when debugging or evolving them, before escalating to restarts.
 
 - **Host services**: operators use `exo/scripts/exo-service-guardian status` for service state and `exo/scripts/exo-service-guardian logs` for scheduler and adapter runner logs. The agent uses `rebuild_and_restart_exo` only for its fixed self-update flow. Deferred rebuild output is written to `.exo/exo-service-guardian-actions.log`.
-- **Adapters**: `list_adapters` returns each adapter's `enabled` state plus health fields `last_connected_at_ms` and `last_error`. `list_adapter_events` returns per-adapter telemetry newest first — `connected`, `disconnected`, `inbound`, `outbound`, `error`, and `lifecycle` records — with `eventType` and `sinceMs` filters. The diagnosis path is: health fields first, then event history, then guardian logs, then restarts.
+- **Adapters**: inspect the managed Slack server's connection and delivery logs.
+  The old `list_adapters` and `list_adapter_events` tools are no longer available.
+  See [the Slack setup guide](../website/docs-src/adapters/slack.md).
 - **Scheduler**: `list_scheduled_tasks` shows tasks and their recent run results (exit codes, errors). Operators can inspect scheduler runner logs through the guardian CLI.
 - **Conversation and host lifecycle**: `list_conversation_events` (area 2).
 - **Sandbox processes**: the shell tool itself, plus sandbox process events recorded in the conversation log.
@@ -135,15 +140,11 @@ sandbox rewinds, and every install is a versioned, auditable artifact write.
 Only names and descriptions are injected each turn; bodies load on demand. See
 `docs/design/skills-arch.md`.
 
-**Adapters.** Adapters connect conversations to external systems:
-
-- `create_adapter` creates an enabled adapter record for the current conversation; the adapter supervisor notices it and starts the worker process.
-- `list_adapters` shows ids, types, configuration summaries, enabled state, and health fields.
-- `disable_adapter` marks an adapter disabled; the worker observes this and exits, preserving history and configuration.
-- `delete_adapter` removes the record and stored state for permanent cleanup.
-- `send_adapter_message` sends an intentional outbound reply to an external target.
-
-There is no separate `start_adapter`/`stop_adapter`/`restart_adapter`: starting is creating an enabled adapter, stopping is disabling, and `enable_adapter` resumes a disabled adapter without recreating it. The safety boundary: inbound adapter messages wake the conversation, but model text is never automatically posted back externally — `send_adapter_message` is always an explicit decision.
+**Adapters.** Slack is configured in the agent definition. Its implementation is
+in `crates/executor/src/managed_agents/adapters/`. It submits input to the managed
+turn queue and delivers the execution stream, including the final answer. The
+self-improving harness and scheduler remain available, but external replies no
+longer depend on `send_adapter_message` or adapter wakeup prompts.
 
 ## 6. Prompt Evolution
 
@@ -152,9 +153,8 @@ Exo's behavior is defined by a small set of prompt surfaces it can read (and, th
 - `exo/prompts/me.md` — the durable identity prompt: broad behavioral rules such as when to inspect state first, when to prefer reversible operations, and how to think about external side effects.
 - `exo/harness.ts` — assembles the developer prompt each turn and describes the available self-control surfaces at a high level.
 - `exo/SELF.md` — the compact self map for navigating its own code.
-- Tool definitions — `exo/tools/sandbox-tools.ts`, `scheduler-tools.ts`, `guardian-tools.ts`, `introspection-tools.ts`, and `exoharness/typescript/harness/adapter-tools.ts` carry model-visible descriptions and JSON schemas; these are the most direct prompts for when and how to call each tool. `exoharness/typescript/harness/built-in-tools.ts` describes `shell`, `inspect_tools`, `manage_tool`, and the opt-in legacy creation tools.
-- `exo/adapters/*/setup-prompt.md` — setup-time guidance for creating specific adapters.
-- Wakeup prompts — `crates/executor/src/native/adapter/runtime.rs` builds the inbound-message wakeup prompts (including the reply-externally contract), and `crates/executor/src/native/scheduler_runtime.rs` builds scheduled-task wakeup prompts from each task's `reportPrompt`.
+- Tool definitions — `exo/tools/sandbox-tools.ts`, `scheduler-tools.ts`, `guardian-tools.ts`, `introspection-tools.ts` carry model-visible descriptions and JSON schemas; these are the most direct prompts for when and how to call each tool. `exoharness/typescript/harness/built-in-tools.ts` describes `shell`, `inspect_tools`, `manage_tool`, and the opt-in legacy creation tools.
+- Wakeup prompts — `crates/executor/src/native/scheduler_runtime.rs` builds scheduled-task wakeup prompts from each task's `reportPrompt`.
 - `.exo/exo-profile.md` (or `EXO_LOCAL_PROMPT_FILE`) — local, user-specific instructions that are not checked in.
 
 Checked-in prompts evolve through the normal self-modification loop: edit, commit, rebuild, restart (areas 1 and 8), which makes prompt history auditable in git. The local profile can be edited directly for user-specific memory that should not be committed.
@@ -171,7 +171,7 @@ What constitutes "Exo" for cloning purposes (the area 2 inventory):
 - **Harness state**: `.exo/exoharness` (agents, conversations, event logs, artifacts), adapter/scheduler records under `.exo`, and the guardian config.
 - **Secrets**: API keys and adapter credentials. The hardest part: on macOS they live in the Keychain, so they cannot be copied as files and need explicit export/re-provisioning on the target.
 - **Sandbox state**: snapshots of the agent sandbox, which are backend-specific (Docker image/volume vs. apple-container).
-- **External identities**: adapter endpoints (Discord bot token, IRC nick, WhatsApp pairing) — single-session by nature, so a clone must either get fresh identities or take over the originals, never share them.
+- **External identities**: Slack app and workspace identities — single-session by nature, so a clone must either get fresh identities or take over the originals, never share them.
 
 Building blocks that already exist: conversation `fork` in the exoharness API, sandbox snapshots, the adapter records being plain JSON under `.exo`, and the canonical event log for the clone to know its own provenance (a `cloned_from` custom event would make lineage explicit).
 
@@ -182,8 +182,8 @@ The likely path is an export/import pair: a guardian-level `export` action that 
 Self-modification needs a verification loop, or failed changes accumulate as corruption. Today this exists as practice and primitives rather than as a single tool:
 
 - **Before a change**: `snapshot_sandbox` for filesystem experiments; a clean git state for code changes.
-- **Validating a change**: run relevant `cargo`/`pnpm` checks in the sandbox against the repo mount, then call `rebuild_and_restart_exo` to validate, build, and activate the change. Observe the reboot wakeup and event log; operators inspect status and logs through the guardian CLI when needed.
+- **Validating a change**: run relevant `cargo`/`pnpm` checks in the sandbox against the repo mount, then call `rebuild_and_restart_exo` to validate, build, and activate the change. Observe the rebuild outcome and event log; operators inspect status and logs through the guardian CLI when needed.
 - **Adopting a change**: commit to git; restart services on the new build with the drain/marker flow.
-- **Rolling back**: `git revert`/`restore` for code, `rewind_sandbox` for filesystem state, `manage_tool` for registry-installed tools, `disable_adapter` for adapters — while the event log (area 2) preserves the record of what was tried, so the next attempt starts from knowledge rather than amnesia.
+- **Rolling back**: `git revert`/`restore` for code, `rewind_sandbox` for filesystem state, `manage_tool` for registry-installed tools, remove an adapter from the agent definition — while the event log (area 2) preserves the record of what was tried, so the next attempt starts from knowledge rather than amnesia.
 
 Gap worth closing eventually: a canary path — run the changed build against a cloned sandbox or forked conversation (areas 4 and 7) and compare behavior before adopting it on the live instance, instead of validating on the only copy of itself.

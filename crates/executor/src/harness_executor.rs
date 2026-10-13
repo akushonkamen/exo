@@ -528,7 +528,7 @@ impl Runtime {
         let live = thread
             .watch_events(std::ops::Bound::Excluded(after))
             .await?;
-        let stream = crate::harness_events::turn_stream(live, turn.clone());
+        let stream = crate::harness_events::turn_stream(live, turn.clone(), None);
         Ok(Some((
             turn,
             ExecutionStreamHandle::new(futures::stream::iter(initial).chain(stream)),
@@ -564,8 +564,29 @@ impl Runtime {
             }
         };
         let events = thread.watch_events(bound).await?;
+        // A checkpoint can follow an error event. Seed the observer from the
+        // saved turn so reconnecting cannot turn its partial text into success.
+        let failure = if after.is_some() {
+            thread
+                .get_events(Some(EventQuery {
+                    turn_id: Some(turn.id),
+                    types: Some(vec![EventKind::ERROR]),
+                    direction: Some(EventQueryDirection::Desc),
+                    limit: Some(1),
+                    ..Default::default()
+                }))
+                .await?
+                .events
+                .into_iter()
+                .find_map(|event| match event.data {
+                    EventData::Error { message, .. } => Some(message),
+                    _ => None,
+                })
+        } else {
+            None
+        };
         Ok(ExecutionStreamHandle::new(
-            crate::harness_events::turn_stream(events, turn),
+            crate::harness_events::turn_stream(events, turn, failure),
         ))
     }
 
@@ -988,7 +1009,9 @@ impl Runtime {
 
     pub async fn shutdown(&self) -> Result<()> {
         #[cfg(feature = "native")]
-        if let Some(previews) = self.previews.get() {
+        if Arc::ptr_eq(&self.provider, &self.root_provider)
+            && let Some(previews) = self.previews.get()
+        {
             previews.stop();
         }
         let shutdown = self.provider.harness().shutdown().await;

@@ -125,10 +125,6 @@ export default defineConfig({
           collapsed: false,
           items: [
             { text: "Slack", link: "/adapters/slack" },
-            { text: "Discord", link: "/adapters/discord" },
-            { text: "WhatsApp", link: "/adapters/whatsapp" },
-            { text: "Signal", link: "/adapters/signal" },
-            { text: "IRC", link: "/adapters/irc" },
             { text: "Custom adapter", link: "/adapters/custom" },
           ],
         },

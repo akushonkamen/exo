@@ -43,7 +43,7 @@ pub trait Storage: Send + Sync {
 mod native;
 
 #[derive(Clone)]
-pub(crate) struct BasicObjectStore {
+pub struct BasicObjectStore {
     store: Arc<dyn Storage>,
     #[cfg(test)]
     fail_json_put_after: Arc<std::sync::Mutex<Option<usize>>>,
@@ -56,7 +56,7 @@ impl BasicObjectStore {
         self.store.clone()
     }
 
-    pub(crate) fn new(store: Arc<dyn Storage>) -> Self {
+    pub fn new(store: Arc<dyn Storage>) -> Self {
         Self {
             store,
             #[cfg(test)]
@@ -79,11 +79,7 @@ impl BasicObjectStore {
             .expect("fault counter poisoned") = Some(successful_puts);
     }
 
-    pub(crate) async fn put_json<T: Serialize>(
-        &self,
-        key: impl AsRef<Path>,
-        value: &T,
-    ) -> Result<()> {
+    pub async fn put_json<T: Serialize>(&self, key: impl AsRef<Path>, value: &T) -> Result<()> {
         #[cfg(test)]
         {
             let mut remaining = self
@@ -116,7 +112,7 @@ impl BasicObjectStore {
             .with_context(|| format!("failed to decode JSON {}", key.display()))
     }
 
-    pub(crate) async fn get_json_if_exists<T: DeserializeOwned>(
+    pub async fn get_json_if_exists<T: DeserializeOwned>(
         &self,
         key: impl AsRef<Path>,
     ) -> Result<Option<T>> {
@@ -150,7 +146,7 @@ impl BasicObjectStore {
         self.store.get(&normalize_path(key.as_ref())).await
     }
 
-    pub(crate) async fn list_keys(&self, prefix: impl AsRef<Path>) -> Result<Vec<String>> {
+    pub async fn list_keys(&self, prefix: impl AsRef<Path>) -> Result<Vec<String>> {
         self.list_keys_after(prefix, None).await
     }
 

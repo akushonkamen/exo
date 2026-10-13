@@ -68,6 +68,7 @@ impl HttpProvider {
         }
         watchers.spawn(async move {
             let observed = async {
+                let mut failure = None;
                 if body.options.idempotency_key.is_some() {
                     let terminal = client
                         .events(
@@ -90,6 +91,7 @@ impl HttpProvider {
                         let stream = crate::harness_events::turn_stream(
                             Box::pin(futures::stream::iter(terminal.into_iter().map(Ok))),
                             result.turn,
+                            None,
                         );
                         futures::pin_mut!(stream);
                         while let Some(event) = stream.next().await {
@@ -99,6 +101,13 @@ impl HttpProvider {
                         }
                         return Ok(());
                     }
+                    failure = terminal
+                        .into_iter()
+                        .rev()
+                        .find_map(|event| match event.data {
+                            exoharness::EventData::Error { message, .. } => Some(message),
+                            _ => None,
+                        });
                 }
                 let events = client
                     .watch(
@@ -109,7 +118,7 @@ impl HttpProvider {
                         },
                     )
                     .await?;
-                let stream = crate::harness_events::turn_stream(events, result.turn);
+                let stream = crate::harness_events::turn_stream(events, result.turn, failure);
                 futures::pin_mut!(stream);
                 loop {
                     let event = tokio::select! {

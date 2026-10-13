@@ -1,4 +1,5 @@
 mod access;
+mod definitions;
 mod progress;
 mod slack;
 mod store;
@@ -19,7 +20,10 @@ use std::{
     collections::BTreeMap,
     sync::{Arc, Mutex},
 };
-use store::{AdapterStore, Authority, DeliveryKind, Inbox, IncomingMessage, Outbox, Route, digest};
+use store::{
+    AdapterStore, Authority, DeliveryKind, Inbox, InboxError, IncomingMessage, Outbox, Route,
+    digest,
+};
 use tokio_util::sync::CancellationToken;
 
 #[derive(Clone)]
@@ -31,6 +35,17 @@ pub(crate) struct Deployment {
     pub connection: Arc<slack::SlackConnection>,
 }
 
+struct CachedCaller {
+    runtime: Arc<Runtime>,
+    last_used: std::time::Instant,
+}
+
+struct DesiredAdapter {
+    agent: AgentId,
+    definition: AdapterDefinition,
+    reload: bool,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct Decision {
     inbox: String,
@@ -38,20 +53,29 @@ struct Decision {
     approval_id: String,
     approved: bool,
     applied: bool,
+    failure: Option<String>,
+}
+
+impl store::PendingRecord for Decision {
+    fn pending(&self) -> bool {
+        !self.applied && self.failure.is_none()
+    }
 }
 
 /// One owner supervises a provider's adapter deployments. HTTP and Socket Mode
 /// persist input through this service before acknowledging external receipt.
 pub struct AdapterService {
     pub(crate) root: Arc<Runtime>,
-    pub(crate) store: AdapterStore,
+    store: AdapterStore,
     pub(crate) identities: IdentityRegistry,
     auth: Option<Arc<AuthServer>>,
     only_agent: Option<AgentId>,
     deployments: Mutex<BTreeMap<String, Deployment>>,
     streams: Mutex<BTreeMap<String, crate::ExecutionStreamHandle>>,
-    callers: Mutex<BTreeMap<String, Arc<Runtime>>>,
+    callers: Mutex<BTreeMap<String, CachedCaller>>,
+    definitions: Arc<definitions::DefinitionCache>,
     admission: tokio::sync::Mutex<()>,
+    routes: Mutex<BTreeMap<String, std::sync::Weak<tokio::sync::Mutex<()>>>>,
     notify: tokio::sync::Notify,
     receipt_notify: tokio::sync::Notify,
     stop: CancellationToken,
@@ -78,7 +102,9 @@ impl AdapterService {
             deployments: Mutex::default(),
             streams: Mutex::default(),
             callers: Mutex::default(),
+            definitions: Arc::default(),
             admission: Default::default(),
+            routes: Default::default(),
             notify: Default::default(),
             receipt_notify: Default::default(),
             stop: CancellationToken::new(),
@@ -86,25 +112,22 @@ impl AdapterService {
     }
     pub async fn webhook_paths(&self) -> Result<Vec<String>> {
         let mut paths = Vec::new();
-        for agent in self.root.exoharness_handle().list_agents().await? {
-            if self.only_agent.is_some_and(|id| id != agent.record().id) {
-                continue;
-            }
-            if let Some(definition) = exo_managed_agents::load_definition(agent.as_ref()).await? {
-                for adapter in &definition.frontmatter.adapters {
-                    if matches!(adapter, AdapterDefinition::Slack(config) if config.transport == SlackTransport::Http)
-                    {
-                        paths.push(if self.only_agent.is_some() {
-                            format!("/exo/adapter/{}", adapter.name())
-                        } else {
-                            format!(
-                                "/exo/agent/{}/adapter/{}",
-                                agent.record().id,
-                                adapter.name()
-                            )
-                        });
-                    }
-                }
+        for (
+            _,
+            DesiredAdapter {
+                agent,
+                definition: adapter,
+                ..
+            },
+        ) in self.desired().await?
+        {
+            if matches!(&adapter, AdapterDefinition::Slack(config) if config.transport == SlackTransport::Http)
+            {
+                paths.push(if self.only_agent.is_some() {
+                    format!("/exo/adapter/{}", adapter.name())
+                } else {
+                    format!("/exo/agent/{agent}/adapter/{}", adapter.name())
+                });
             }
         }
         Ok(paths)
@@ -125,23 +148,99 @@ impl AdapterService {
         self.caller_runtime(authority).await
     }
     async fn caller_runtime(&self, authority: Authority) -> Result<Arc<Runtime>> {
-        let caller =
-            access::caller(&self.root, &self.store, self.identities.clone(), authority).await?;
+        let principal = access::principal(&authority)?;
+        if let Some(caller) = self
+            .callers
+            .lock()
+            .expect("adapter runtimes poisoned")
+            .get_mut(&principal)
+        {
+            caller.last_used = std::time::Instant::now();
+            return Ok(caller.runtime.clone());
+        }
+        let caller = access::caller(
+            &self.root,
+            &self.store,
+            self.identities.clone(),
+            self.definitions.clone(),
+            authority,
+        )
+        .await?;
         let mut callers = self.callers.lock().expect("adapter runtimes poisoned");
-        if let Some(runtime) = callers.get(&caller.principal) {
-            return Ok(runtime.clone());
+        if let Some(caller) = callers.get_mut(&caller.principal) {
+            caller.last_used = std::time::Instant::now();
+            return Ok(caller.runtime.clone());
         }
         let principal = caller.principal.clone();
         let runtime = Arc::new(self.root.with_caller(caller)?);
-        callers.insert(principal, runtime.clone());
+        callers.insert(
+            principal,
+            CachedCaller {
+                runtime: runtime.clone(),
+                last_used: std::time::Instant::now(),
+            },
+        );
         Ok(runtime)
     }
     async fn shutdown_callers(&self) -> Result<()> {
         let callers = std::mem::take(&mut *self.callers.lock().expect("adapter runtimes poisoned"));
-        futures::future::join_all(callers.values().map(|runtime| runtime.shutdown()))
+        futures::future::join_all(callers.values().map(|caller| caller.runtime.shutdown()))
             .await
             .into_iter()
             .collect()
+    }
+    async fn prune_callers(&self) {
+        let expired = {
+            let mut callers = self.callers.lock().expect("adapter runtimes poisoned");
+            let keys = callers
+                .iter()
+                .filter(|(_, caller)| {
+                    caller.last_used.elapsed() > std::time::Duration::from_secs(300)
+                        && Arc::strong_count(&caller.runtime) == 1
+                })
+                .map(|(key, _)| key.clone())
+                .collect::<Vec<_>>();
+            keys.into_iter()
+                .filter_map(|key| callers.remove(&key))
+                .collect::<Vec<_>>()
+        };
+        futures::future::join_all(expired.into_iter().map(|caller| async move {
+            if let Err(error) = caller.runtime.shutdown().await {
+                tracing::warn!(%error, "shutting down idle adapter runtime");
+            }
+        }))
+        .await;
+    }
+    fn touch_caller(&self, deployment: &Deployment, inbox: &Inbox) -> Result<()> {
+        if let Some(thread) = inbox.thread {
+            let principal = access::principal(&Authority {
+                deployment: deployment.id.clone(),
+                agent: deployment.agent,
+                thread,
+                adapter: deployment.definition.name().into(),
+                source: (&inbox.message).into(),
+                grant: inbox.grant.clone(),
+            })?;
+            if let Some(caller) = self
+                .callers
+                .lock()
+                .expect("adapter runtimes poisoned")
+                .get_mut(&principal)
+            {
+                caller.last_used = std::time::Instant::now();
+            }
+        }
+        Ok(())
+    }
+    fn route_lock(&self, key: &str) -> Arc<tokio::sync::Mutex<()>> {
+        let mut routes = self.routes.lock().expect("adapter routes poisoned");
+        routes.retain(|_, lock| lock.strong_count() > 0);
+        if let Some(lock) = routes.get(key).and_then(std::sync::Weak::upgrade) {
+            return lock;
+        }
+        let lock = Arc::new(tokio::sync::Mutex::new(()));
+        routes.insert(key.into(), Arc::downgrade(&lock));
+        lock
     }
     fn check_scope(&self, agent: AgentId) -> Result<()> {
         ensure!(
@@ -223,23 +322,58 @@ impl AdapterService {
                     tracing::error!(adapter = deployment.definition.name(), %error, "adapter work retained for retry");
                 }
             }
+            self.prune_callers().await;
         }
     }
-    pub async fn reconcile(self: &Arc<Self>) -> Result<()> {
+    async fn desired(&self) -> Result<BTreeMap<String, DesiredAdapter>> {
         let mut desired = BTreeMap::new();
-        for agent in self.root.exoharness_handle().list_agents().await? {
+        let agents = self.root.exoharness_handle().list_agents().await?;
+        self.definitions
+            .retain(&agents.iter().map(|agent| agent.record().id).collect());
+        for agent in agents {
             if self.only_agent.is_some_and(|id| id != agent.record().id) {
                 continue;
             }
-            let Some(definition) = exo_managed_agents::load_definition(agent.as_ref()).await?
-            else {
-                continue;
+            let definition = match self.definitions.load(agent.as_ref()).await {
+                Ok(Some(definition)) => definition,
+                Ok(None) => continue,
+                Err(error) => {
+                    tracing::error!(agent = %agent.record().id, %error, "adapter definition unavailable; retaining running deployments");
+                    for deployment in self
+                        .deployments
+                        .lock()
+                        .expect("adapter deployments poisoned")
+                        .values()
+                        .filter(|deployment| deployment.agent == agent.record().id)
+                    {
+                        desired.insert(
+                            deployment.id.clone(),
+                            DesiredAdapter {
+                                agent: deployment.agent,
+                                definition: deployment.definition.clone(),
+                                reload: false,
+                            },
+                        );
+                    }
+                    continue;
+                }
             };
-            for definition in definition.frontmatter.adapters {
+            for definition in definition.frontmatter.adapters.iter().cloned() {
                 let id = AdapterStore::deployment(agent.record().id, definition.name());
-                desired.insert(id, (agent.record().id, definition));
+                desired.insert(
+                    id,
+                    DesiredAdapter {
+                        agent: agent.record().id,
+                        definition,
+                        reload: true,
+                    },
+                );
             }
         }
+        Ok(desired)
+    }
+    pub async fn reconcile(self: &Arc<Self>) -> Result<()> {
+        let desired = self.desired().await?;
         let removed = {
             let mut current = self
                 .deployments
@@ -257,8 +391,16 @@ impl AdapterService {
         for deployment in removed {
             deployment.connection.shutdown().await;
         }
-        for (id, (agent, definition)) in desired {
-            if !matches!(definition, AdapterDefinition::Slack(_)) {
+        for (
+            id,
+            DesiredAdapter {
+                agent,
+                definition,
+                reload,
+            },
+        ) in desired
+        {
+            if !reload {
                 continue;
             }
             if let Err(error) = self.reconcile_one(&id, agent, definition).await {
@@ -273,9 +415,7 @@ impl AdapterService {
         agent: AgentId,
         definition: AdapterDefinition,
     ) -> Result<()> {
-        let AdapterDefinition::Slack(config) = &definition else {
-            anyhow::bail!("only Slack is implemented");
-        };
+        let AdapterDefinition::Slack(config) = &definition;
         let owner = if let Some(auth) = &self.auth {
             self.root
                 .with_caller(auth.caller(auth.owner().await, false))?
@@ -295,27 +435,21 @@ impl AdapterService {
         } else {
             ["bot-token", "signing-secret"]
         };
-        let mut credentials = BTreeMap::new();
         let mut revisions = Vec::new();
         let metadata = vault.list_secrets().await?;
         for name in names {
             if let Some(secret) = metadata.iter().find(|s| s.name == name) {
-                let value = vault
-                    .get_secret(&secret.id)
-                    .await?
-                    .context("adapter secret is missing")?;
-                credentials.insert(name.to_owned(), value.bearer_value().to_owned());
                 revisions.push((secret.id, secret.revision));
             }
         }
-        let fingerprint = digest(&serde_json::to_string(&(&definition, revisions))?);
+        let fingerprint = digest(&serde_json::to_string(&(&definition, &revisions))?);
         if self
             .deployment(id)
             .is_some_and(|d| d.fingerprint == fingerprint)
         {
             return Ok(());
         }
-        if credentials.len() < 2 {
+        if revisions.len() < 2 {
             let previous = self
                 .deployments
                 .lock()
@@ -326,6 +460,18 @@ impl AdapterService {
             }
             tracing::debug!(adapter = definition.name(), "adapter awaiting credentials");
             return Ok(());
+        }
+        let mut credentials = BTreeMap::new();
+        for name in names {
+            let secret = metadata
+                .iter()
+                .find(|secret| secret.name == name)
+                .context("adapter secret metadata is missing")?;
+            let value = vault
+                .get_secret(&secret.id)
+                .await?
+                .context("adapter secret is missing")?;
+            credentials.insert(name.to_owned(), value.bearer_value().to_owned());
         }
         let connection =
             slack::SlackConnection::connect(self, id, config.clone(), &credentials).await?;
@@ -355,7 +501,7 @@ impl AdapterService {
         }
         Ok(())
     }
-    pub(crate) async fn accept(
+    async fn accept(
         &self,
         deployment: &Deployment,
         message: IncomingMessage,
@@ -386,8 +532,9 @@ impl AdapterService {
                 progress: Default::default(),
                 complete: false,
                 error: None,
+                observer_retry: None,
             };
-            self.store.put(&key, &inbox).await?;
+            self.store.save(&key, &inbox).await?;
             inbox
         };
         self.track(deployment, &inbox.message).await?;
@@ -414,61 +561,101 @@ impl AdapterService {
     async fn process(&self, deployment: &Deployment) -> Result<()> {
         let mut inbox = self
             .store
-            .list::<Inbox>(&format!("adapters/v1/{}/inbox", deployment.id))
+            .pending::<Inbox>(&format!("adapters/v1/{}/inbox", deployment.id))
             .await?;
         inbox.sort_by_key(|record| record.accepted);
         for mut record in inbox {
             if record.complete || record.message.account != deployment.connection.account {
                 continue;
             }
-            let connected = self
-                .streams
-                .lock()
-                .expect("adapter streams poisoned")
-                .contains_key(&stream_key(deployment, &record));
-            if !connected && let Err(error) = self.submit(deployment, &mut record).await {
-                if error
-                    .downcast_ref::<crate::remote::IdentityAccessChanged>()
-                    .is_some()
-                {
-                    record.error = Some(error.to_string());
-                    self.queue_text(
-                        deployment,
-                        &record,
-                        "error",
-                        format!("Turn failed: {error}"),
-                    )
-                    .await?;
-                    self.queue_status(deployment, &record, String::new())
-                        .await?;
-                    record.complete = true;
-                    self.save_inbox(deployment, &record).await?;
-                    continue;
-                }
-                // A queue write may have succeeded before the caller lost its
-                // receipt. Retry with the same principal, session and key.
-                tracing::warn!(input = %record.message.id, %error, "adapter submission retained for retry");
-                continue;
+            if let Err(error) = self.process_input(deployment, &mut record).await {
+                tracing::warn!(input = %record.message.id, %error, "adapter input retained for retry");
             }
-            self.drain_stream(deployment, &mut record).await?;
-            if record.complete {
-                self.finish_stream(deployment, &mut record).await?;
-            }
-            self.save_inbox(deployment, &record).await?;
         }
-        self.apply_decisions(deployment).await?;
+        if let Err(error) = self.apply_decisions(deployment).await {
+            tracing::warn!(adapter = deployment.definition.name(), %error, "adapter decisions retained for retry");
+        }
         self.deliver(deployment).await?;
+        Ok(())
+    }
+    async fn process_input(&self, deployment: &Deployment, record: &mut Inbox) -> Result<()> {
+        self.touch_caller(deployment, record)?;
+        self.restore_receipt(deployment, record).await?;
+        if record.complete {
+            self.finish_stream(deployment, record).await?;
+            return self.save_inbox(deployment, record).await;
+        }
+        let connected = self
+            .streams
+            .lock()
+            .expect("adapter streams poisoned")
+            .contains_key(&stream_key(deployment, record));
+        if !connected
+            && record
+                .observer_retry
+                .as_ref()
+                .is_some_and(|retry| retry.retry_at > chrono::Utc::now().timestamp())
+        {
+            return Ok(());
+        }
+        if !connected && let Err(error) = self.submit(deployment, record).await {
+            if error.is::<crate::remote::IdentityAccessChanged>()
+                || error.is::<access::AdapterAccessDenied>()
+            {
+                tracing::info!(input = %record.message.id, %error, "adapter access removed");
+                record.error = Some(InboxError::AccessRemoved);
+                record.complete = true;
+                self.finish_stream(deployment, record).await?;
+                self.save_inbox(deployment, record).await?;
+                return Ok(());
+            }
+            // A queue write may have succeeded before the caller lost its
+            // receipt. Retry with the same principal, session and key.
+            tracing::warn!(input = %record.message.id, %error, "adapter submission retained for retry");
+            let chunks = self.reconnecting(record);
+            self.queue_stream(deployment, record, chunks, false).await?;
+            self.save_inbox(deployment, record).await?;
+            return Ok(());
+        }
+        self.drain_stream(deployment, record).await?;
+        if record.complete {
+            self.finish_stream(deployment, record).await?;
+            self.save_inbox(deployment, record).await?;
+        }
         Ok(())
     }
     async fn save_inbox(&self, deployment: &Deployment, inbox: &Inbox) -> Result<()> {
         self.store
-            .put(
+            .save(
                 &AdapterStore::inbox(&deployment.id, &inbox.message.id),
                 inbox,
             )
             .await
     }
+    async fn restore_receipt(&self, deployment: &Deployment, inbox: &mut Inbox) -> Result<()> {
+        if let Some(outbox) = self
+            .store
+            .get::<Outbox>(&AdapterStore::outbox(
+                &deployment.id,
+                &format!("{}:stream", inbox.message.id),
+            ))
+            .await?
+            && let Some(receipt) = outbox.receipt
+            && receipt.cursor >= inbox.cursor
+        {
+            inbox.cursor = receipt.cursor;
+            inbox.progress = receipt.progress;
+            inbox.complete = receipt.complete;
+            inbox.final_text = receipt.final_text;
+            inbox.error = receipt.error;
+            inbox.observer_retry = receipt.observer_retry;
+        }
+        Ok(())
+    }
     async fn submit(&self, deployment: &Deployment, inbox: &mut Inbox) -> Result<()> {
+        if inbox.complete {
+            return Ok(());
+        }
         if let Some(grant) = &inbox.grant {
             self.identities.validate(grant).await?;
         }
@@ -478,8 +665,9 @@ impl AdapterService {
             .get_agent(&deployment.agent)
             .await?
             .context("adapter agent is missing")?;
-        let route_guard = self.admission.lock().await;
         let route_key = AdapterStore::route(&deployment.id, &inbox.message);
+        let route_lock = self.route_lock(&route_key);
+        let route_guard = route_lock.lock().await;
         let thread_id = match self.store.get::<Route>(&route_key).await? {
             Some(Route {
                 thread: Some(thread),
@@ -511,6 +699,9 @@ impl AdapterService {
                     },
                 )
                 .await?;
+                // Admission only protects the durable route write. Thread
+                // discovery and creation must not delay Slack acknowledgements.
+                let _admission = self.admission.lock().await;
                 self.store
                     .put(
                         &route_key,
@@ -594,6 +785,7 @@ impl AdapterService {
         Ok(())
     }
     async fn drain_stream(&self, deployment: &Deployment, inbox: &mut Inbox) -> Result<bool> {
+        let previous = store::StreamReceipt::from(&*inbox);
         let key = stream_key(deployment, inbox);
         let stream = self
             .streams
@@ -625,21 +817,30 @@ impl AdapterService {
                 }
                 Some(Some(Ok(event))) => chunks.extend(progress.event(event)?),
                 Some(Some(Err(error))) => {
-                    inbox.error = Some(error.to_string());
-                    chunks.push(progress::Progress::status("Turn failed"));
-                    inbox.complete = true;
+                    if error.is::<crate::turn_queue::TurnFailed>() {
+                        inbox.error = Some(InboxError::TurnFailed(error.to_string()));
+                        chunks.push(progress::Progress::status("Turn failed"));
+                        inbox.complete = true;
+                    } else {
+                        tracing::warn!(input = %inbox.message.id, %error, "adapter observer disconnected; turn retained for recovery");
+                        // Advancing the committed cursor counts as progress;
+                        // retrying the same malformed event does not.
+                        if checkpoint > inbox.cursor {
+                            inbox.observer_retry = None;
+                        }
+                        chunks.extend(self.reconnecting(inbox));
+                    }
                     connected = false;
                     break;
                 }
                 Some(None) => {
+                    chunks.extend(self.reconnecting(inbox));
                     connected = false;
                     break;
                 }
                 None => break,
             }
         }
-        // If a delivery write fails, recover these consumed events from the journal.
-        self.queue_stream(deployment, inbox, chunks, false).await?;
         for (turn, approval) in approvals {
             self.queue_delivery(
                 deployment,
@@ -654,13 +855,22 @@ impl AdapterService {
             .await?;
         }
         inbox.progress = progress;
+        if connected && checkpoint > inbox.cursor {
+            inbox.observer_retry = None;
+        }
         inbox.cursor = checkpoint;
         if let Some(result) = completion {
+            inbox.observer_retry = None;
             inbox.cursor = Some(result.latest_event_id);
             inbox.final_text = inbox.progress.last_message().map(str::to_owned);
             inbox.complete = true;
         }
-        if !inbox.complete {
+        // The output and its resume position are committed in one object.
+        let changed = store::StreamReceipt::from(&*inbox) != previous;
+        if changed || !chunks.is_empty() {
+            self.queue_stream(deployment, inbox, chunks, false).await?;
+        }
+        if !inbox.complete && changed {
             self.save_inbox(deployment, inbox).await?;
         }
         if connected {
@@ -673,20 +883,41 @@ impl AdapterService {
     }
 
     async fn finish_stream(&self, deployment: &Deployment, inbox: &mut Inbox) -> Result<()> {
-        let text = match &inbox.error {
-            Some(error) => format!("Turn failed: {error}"),
-            None => inbox
-                .final_text
-                .clone()
-                .unwrap_or_else(|| "The turn finished without a text response.".into()),
+        let (text, failure) = match &inbox.error {
+            Some(InboxError::AccessRemoved) => ("Access removed".into(), Some("Access removed")),
+            Some(InboxError::TurnFailed(error)) => {
+                (format!("Turn failed: {error}"), Some("Turn failed"))
+            }
+            None => (
+                inbox
+                    .final_text
+                    .clone()
+                    .unwrap_or_else(|| "The turn finished without a text response.".into()),
+                None,
+            ),
         };
-        let chunks = inbox.progress.finish(&text, inbox.error.is_some());
+        let chunks = inbox.progress.finish(&text, failure);
         self.queue_stream(deployment, inbox, chunks, true).await?;
         self.streams
             .lock()
             .expect("adapter streams poisoned")
             .remove(&stream_key(deployment, inbox));
         self.queue_status(deployment, inbox, String::new()).await
+    }
+
+    fn reconnecting(&self, inbox: &mut Inbox) -> Vec<SlackStreamChunk> {
+        let retry = inbox.observer_retry.get_or_insert(store::ObserverRetry {
+            attempts: 0,
+            retry_at: 0,
+        });
+        retry.attempts = retry.attempts.saturating_add(1);
+        let delay = (2_i64.pow(retry.attempts.min(6))).min(60);
+        retry.retry_at = chrono::Utc::now().timestamp() + delay;
+        if retry.attempts == 1 {
+            vec![progress::Progress::status("Reconnecting")]
+        } else {
+            Vec::new()
+        }
     }
 
     async fn queue_stream(
@@ -696,9 +927,6 @@ impl AdapterService {
         chunks: Vec<SlackStreamChunk>,
         complete: bool,
     ) -> Result<()> {
-        if chunks.is_empty() && !complete {
-            return Ok(());
-        }
         let id = format!("{}:stream", inbox.message.id);
         let key = AdapterStore::outbox(&deployment.id, &id);
         let mut delivery = self
@@ -726,7 +954,20 @@ impl AdapterService {
                 attempts: 0,
                 retry_at: 0,
                 external_id: None,
+                receipt: None,
             });
+        let receipt = store::StreamReceipt::from(inbox);
+        ensure!(
+            delivery
+                .receipt
+                .as_ref()
+                .is_none_or(|saved| saved.cursor <= receipt.cursor),
+            "cannot overwrite a newer adapter output receipt; restore it before writing"
+        );
+        if chunks.is_empty() && !complete && delivery.receipt.as_ref() == Some(&receipt) {
+            return Ok(());
+        }
+        delivery.receipt = Some(receipt);
         let DeliveryKind::Stream {
             chunks: pending,
             complete: finished,
@@ -754,7 +995,7 @@ impl AdapterService {
         }
         *finished = complete;
         delivery.sent = false;
-        self.store.put(&key, &delivery).await
+        self.store.save(&key, &delivery).await
     }
     async fn queue_delivery(
         &self,
@@ -767,7 +1008,7 @@ impl AdapterService {
         let key = AdapterStore::outbox(&deployment.id, &id);
         if self.store.get::<Outbox>(&key).await?.is_none() {
             self.store
-                .put(
+                .save(
                     &key,
                     &Outbox {
                         id,
@@ -786,6 +1027,7 @@ impl AdapterService {
                         attempts: 0,
                         retry_at: 0,
                         external_id: None,
+                        receipt: None,
                     },
                 )
                 .await?;
@@ -806,7 +1048,7 @@ impl AdapterService {
             return Ok(());
         }
         self.store
-            .put(
+            .save(
                 &key,
                 &Outbox {
                     id,
@@ -828,39 +1070,22 @@ impl AdapterService {
                     attempts: 0,
                     retry_at: 0,
                     external_id: None,
+                    receipt: None,
                 },
             )
             .await
     }
-    async fn queue_text(
-        &self,
-        deployment: &Deployment,
-        inbox: &Inbox,
-        suffix: &str,
-        text: String,
-    ) -> Result<()> {
-        for (index, chunk) in text.chars().collect::<Vec<_>>().chunks(3500).enumerate() {
-            self.queue_delivery(
-                deployment,
-                &inbox.message,
-                &format!("{suffix}:{index:06}"),
-                DeliveryKind::Text {
-                    text: chunk.iter().collect(),
-                },
-            )
-            .await?;
-        }
-        Ok(())
-    }
     async fn deliver(&self, deployment: &Deployment) -> Result<()> {
         let mut deliveries = self
             .store
-            .list::<Outbox>(&format!("adapters/v1/{}/outbox", deployment.id))
+            .pending::<Outbox>(&format!("adapters/v1/{}/outbox", deployment.id))
             .await?;
         deliveries.sort_by(|a, b| a.id.cmp(&b.id));
         for delivery in deliveries {
-            if !matches!(delivery.kind, DeliveryKind::Reaction { .. }) {
-                self.deliver_one(deployment, delivery).await?;
+            if !matches!(delivery.kind, DeliveryKind::Reaction { .. })
+                && let Err(error) = self.deliver_one(deployment, delivery).await
+            {
+                tracing::warn!(adapter = deployment.definition.name(), %error, "adapter delivery retained for retry");
             }
         }
         Ok(())
@@ -868,11 +1093,13 @@ impl AdapterService {
     async fn deliver_receipts(&self, deployment: &Deployment) -> Result<()> {
         let deliveries = self
             .store
-            .list::<Outbox>(&format!("adapters/v1/{}/outbox", deployment.id))
+            .pending::<Outbox>(&format!("adapters/v1/{}/outbox", deployment.id))
             .await?;
         for delivery in deliveries {
-            if matches!(delivery.kind, DeliveryKind::Reaction { .. }) {
-                self.deliver_one(deployment, delivery).await?;
+            if matches!(delivery.kind, DeliveryKind::Reaction { .. })
+                && let Err(error) = self.deliver_one(deployment, delivery).await
+            {
+                tracing::warn!(adapter = deployment.definition.name(), %error, "adapter receipt retained for retry");
             }
         }
         Ok(())
@@ -899,7 +1126,7 @@ impl AdapterService {
         {
             delivery.sent = true;
             self.store
-                .put(
+                .save(
                     &AdapterStore::outbox(&deployment.id, &delivery.id),
                     &delivery,
                 )
@@ -915,7 +1142,7 @@ impl AdapterService {
         {
             delivery.sent = true;
             self.store
-                .put(
+                .save(
                     &AdapterStore::outbox(&deployment.id, &delivery.id),
                     &delivery,
                 )
@@ -970,7 +1197,7 @@ impl AdapterService {
             }
         }
         self.store
-            .put(
+            .save(
                 &AdapterStore::outbox(&deployment.id, &delivery.id),
                 &delivery,
             )
@@ -1029,7 +1256,7 @@ impl AdapterService {
         }
         ensure!(!source.complete, "this turn has finished");
         self.store
-            .put(
+            .save(
                 &key,
                 &Decision {
                     inbox,
@@ -1037,6 +1264,7 @@ impl AdapterService {
                     approval_id: approval.approval_id,
                     approved,
                     applied: false,
+                    failure: None,
                 },
             )
             .await?;
@@ -1045,55 +1273,80 @@ impl AdapterService {
     }
     async fn apply_decisions(&self, deployment: &Deployment) -> Result<()> {
         let prefix = format!("adapters/v1/{}/decisions", deployment.id);
-        for mut decision in self.store.list::<Decision>(&prefix).await? {
+        for mut decision in self.store.pending::<Decision>(&prefix).await? {
             if decision.applied {
                 continue;
             }
-            let inbox = self
-                .store
-                .get::<Inbox>(&AdapterStore::inbox(&deployment.id, &decision.inbox))
-                .await?
-                .context("approval source missing")?;
-            let authority = Authority {
-                deployment: deployment.id.clone(),
-                agent: deployment.agent,
-                thread: inbox.thread.context("approval thread missing")?,
-                adapter: deployment.definition.name().into(),
-                source: (&inbox.message).into(),
-                grant: inbox.grant.clone(),
-            };
-            let runtime = self.caller_runtime(authority).await?;
-            let applied = runtime
-                .respond_to_pending_approval(
-                    deployment.agent,
-                    inbox.thread.context("approval thread missing")?,
-                    decision.turn.id,
-                    &exo_managed_agents::http::protocol::ApprovalResponseBody {
-                        approval_id: decision.approval_id.clone(),
-                        approved: decision.approved,
-                        allow_for_tool: false,
-                        session_id: decision.turn.session_id,
-                    },
-                )
-                .await?;
-            if applied {
-                self.queue_stream(
-                    deployment,
-                    &inbox,
-                    vec![progress::Progress::status("Waiting for model")],
-                    false,
-                )
-                .await?;
-            }
-            if !applied && !inbox.complete {
+            if decision.failure.is_some() {
                 continue;
             }
-            decision.applied = true;
-            let id = format!("{}:approval:{}", decision.inbox, decision.approval_id);
-            self.store
-                .put(&format!("{prefix}/{}.json", digest(&id)), &decision)
-                .await?;
+            if let Err(error) = self.apply_decision(deployment, &mut decision).await {
+                tracing::warn!(input = %decision.inbox, %error, "adapter decision rejected or retained for retry");
+                if error.is::<crate::remote::IdentityAccessChanged>()
+                    || error.is::<access::AdapterAccessDenied>()
+                {
+                    decision.failure = Some(error.to_string());
+                    let id = format!("{}:approval:{}", decision.inbox, decision.approval_id);
+                    if let Err(error) = self
+                        .store
+                        .save(&format!("{prefix}/{}.json", digest(&id)), &decision)
+                        .await
+                    {
+                        tracing::warn!(%error, "saving rejected adapter decision");
+                    }
+                }
+            }
         }
+        Ok(())
+    }
+    async fn apply_decision(&self, deployment: &Deployment, decision: &mut Decision) -> Result<()> {
+        let prefix = format!("adapters/v1/{}/decisions", deployment.id);
+        let mut inbox = self
+            .store
+            .get::<Inbox>(&AdapterStore::inbox(&deployment.id, &decision.inbox))
+            .await?
+            .context("approval source missing")?;
+        self.restore_receipt(deployment, &mut inbox).await?;
+        let authority = Authority {
+            deployment: deployment.id.clone(),
+            agent: deployment.agent,
+            thread: inbox.thread.context("approval thread missing")?,
+            adapter: deployment.definition.name().into(),
+            source: (&inbox.message).into(),
+            grant: inbox.grant.clone(),
+        };
+        let runtime = self.caller_runtime(authority).await?;
+        let applied = runtime
+            .respond_to_pending_approval(
+                deployment.agent,
+                inbox.thread.context("approval thread missing")?,
+                decision.turn.id,
+                &exo_managed_agents::http::protocol::ApprovalResponseBody {
+                    approval_id: decision.approval_id.clone(),
+                    approved: decision.approved,
+                    allow_for_tool: false,
+                    session_id: decision.turn.session_id,
+                },
+            )
+            .await?;
+        if applied {
+            inbox.observer_retry = None;
+            self.queue_stream(
+                deployment,
+                &inbox,
+                vec![progress::Progress::status("Waiting for model")],
+                false,
+            )
+            .await?;
+        }
+        if !applied && !inbox.complete {
+            return Ok(());
+        }
+        decision.applied = true;
+        let id = format!("{}:approval:{}", decision.inbox, decision.approval_id);
+        self.store
+            .save(&format!("{prefix}/{}.json", digest(&id)), decision)
+            .await?;
         Ok(())
     }
     pub async fn configuration(
@@ -1118,15 +1371,25 @@ impl AdapterService {
                 .context("agent missing")?,
         };
         self.check_scope(handle.record().id)?;
-        let definition = exo_managed_agents::load_definition(handle.as_ref())
-            .await?
-            .context("agent has no managed definition")?;
+        let definition = match self.definitions.load(handle.as_ref()).await {
+            Ok(definition) => definition.context("agent has no managed definition")?,
+            Err(error) => {
+                if let Some(deployment) =
+                    self.deployment(&AdapterStore::deployment(handle.record().id, name))
+                {
+                    tracing::warn!(%error, "serving the retained adapter configuration until it can be reloaded");
+                    return Ok((deployment.agent, deployment.definition));
+                }
+                return Err(error);
+            }
+        };
         let adapter = definition
             .frontmatter
             .adapters
-            .into_iter()
+            .iter()
             .find(|adapter| adapter.name() == name)
-            .context("adapter not found")?;
+            .context("adapter not found")?
+            .clone();
         Ok((handle.record().id, adapter))
     }
     pub async fn slack_webhook(
@@ -1140,9 +1403,7 @@ impl AdapterService {
     ) -> Result<Option<String>> {
         use slack_morphism::prelude::*;
         let (agent, definition) = self.configuration(agent, name).await?;
-        let AdapterDefinition::Slack(config) = definition else {
-            anyhow::bail!("adapter is not Slack");
-        };
+        let AdapterDefinition::Slack(config) = definition;
         ensure!(
             config.transport == SlackTransport::Http,
             "adapter does not use HTTP"

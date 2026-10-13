@@ -60,6 +60,8 @@ impl crate::harness_executor::HarnessExecutor for Answer {
 struct FailingStorage {
     inner: Arc<dyn Storage>,
     fail: Mutex<Option<String>>,
+    fail_after: Mutex<Option<String>>,
+    reads: AtomicUsize,
 }
 #[async_trait]
 impl Storage for FailingStorage {
@@ -71,9 +73,16 @@ impl Storage for FailingStorage {
                 anyhow::bail!("injected storage failure");
             }
         }
-        self.inner.put(key, bytes, blob).await
+        self.inner.put(key, bytes, blob).await?;
+        let mut fail = self.fail_after.lock().unwrap();
+        if fail.as_deref() == Some(key) {
+            *fail = None;
+            anyhow::bail!("injected failure after commit");
+        }
+        Ok(())
     }
     async fn get(&self, key: &str) -> Result<Option<Vec<u8>>> {
+        self.reads.fetch_add(1, Ordering::SeqCst);
         self.inner.get(key).await
     }
     async fn list(&self, prefix: &str) -> Result<Vec<String>> {
@@ -99,6 +108,9 @@ struct Fixture {
 }
 impl Fixture {
     async fn new() -> Result<Self> {
+        Self::with_enterprise(None).await
+    }
+    async fn with_enterprise(enterprise: Option<&str>) -> Result<Self> {
         let state = Arc::new(
             exoharness::BasicExoHarness::in_memory(crate::test_support::local_test_config(
                 "unused-slack-test",
@@ -119,19 +131,25 @@ impl Fixture {
         let storage = Arc::new(FailingStorage {
             inner: state.provider_storage()?,
             fail: Mutex::default(),
+            fail_after: Mutex::default(),
+            reads: AtomicUsize::default(),
         });
         Arc::get_mut(&mut service).unwrap().store = AdapterStore::new(storage.clone());
         let slack = MockServer::start().await;
         for (method, response) in [
             (
                 "auth.test",
-                serde_json::json!({"ok":true,"team":"Exo","team_id":"T1","user_id":"UBOT","bot_id":"B1","url":"https://exo.slack.com"}),
+                serde_json::json!({"ok":true,"team":"Exo","team_id":"T1","user_id":"UBOT","bot_id":"B1","url":"https://exo.slack.com","enterprise_id":enterprise}),
             ),
             (
                 "bots.info",
                 serde_json::json!({"ok":true,"bot":{"name":"Exo","app_id":"A1","id":"B1"}}),
             ),
             ("reactions.add", serde_json::json!({"ok":true})),
+            (
+                "users.info",
+                serde_json::json!({"ok":true,"user":{"id":"UALICE","team_id":"T1","name":"alice","is_bot":false,"is_stranger":false}}),
+            ),
             (
                 "assistant.threads.setStatus",
                 serde_json::json!({"ok":true}),
@@ -169,9 +187,7 @@ impl Fixture {
             slack_morphism::hyper_tokio::SlackClientHyperConnector::with_connector(connector)
                 .with_slack_api_url(&format!("{}/api", slack.uri())),
         ));
-        let AdapterDefinition::Slack(config) = definition.frontmatter.adapters[0].clone() else {
-            unreachable!()
-        };
+        let AdapterDefinition::Slack(config) = definition.frontmatter.adapters[0].clone();
         let id = AdapterStore::deployment(agent.record().id, "slack");
         let connection = slack::SlackConnection::connect_with_client(
             &service,
@@ -250,6 +266,672 @@ impl Fixture {
             .await?;
         Ok(vault.record().id)
     }
+    async fn pending_turn(
+        &self,
+        message: &IncomingMessage,
+    ) -> Result<(Inbox, Arc<dyn ThreadHandle>, Arc<dyn TurnHandle>)> {
+        self.service
+            .accept(&self.deployment, message.clone(), None)
+            .await?;
+        let agent = self
+            .service
+            .root
+            .exoharness_handle()
+            .get_agent(&self.deployment.agent)
+            .await?
+            .unwrap();
+        let thread = agent.new_thread(Default::default()).await?;
+        let turn = thread
+            .begin_turn(exoharness::BeginTurnRequest {
+                turn: exoharness::test_support::new_test_turn_record(),
+                new_session: true,
+                input: Vec::new(),
+                initial_events: Vec::new(),
+            })
+            .await?;
+        let mut inbox = self.inbox(message).await?;
+        inbox.thread = Some(thread.record().id);
+        inbox.turn = Some(turn.record().clone());
+        self.service.save_inbox(&self.deployment, &inbox).await?;
+        Ok((inbox, thread, turn))
+    }
+}
+
+#[tokio::test]
+async fn observer_errors_reconnect_but_failed_completion_closes_the_input() -> Result<()> {
+    let f = Fixture::new().await?;
+    let message = f.input("UALICE", "1.0");
+    let (mut inbox, thread, turn) = f.pending_turn(&message).await?;
+    f.service.streams.lock().unwrap().insert(
+        stream_key(&f.deployment, &inbox),
+        crate::ExecutionStreamHandle::new(futures::stream::iter(vec![Err(anyhow::anyhow!(
+            "work retained for recovery"
+        ))])),
+    );
+    f.service.drain_stream(&f.deployment, &mut inbox).await?;
+    assert!(!inbox.complete);
+    assert!(inbox.error.is_none());
+    turn.add_events(vec![EventData::Messages {
+        messages: vec![Message::Assistant {
+            content: AssistantContent::String("Recovered answer.".into()),
+            id: None,
+        }],
+        usage: None,
+        response_id: None,
+    }])
+    .await?;
+    turn.finish().await?;
+    let stream = f
+        .service
+        .root
+        .watch_turn(thread.as_ref(), turn.record().clone(), inbox.cursor)
+        .await?;
+    f.service
+        .streams
+        .lock()
+        .unwrap()
+        .insert(stream_key(&f.deployment, &inbox), stream);
+    f.service.drain_stream(&f.deployment, &mut inbox).await?;
+    assert!(inbox.complete);
+    assert_eq!(inbox.final_text.as_deref(), Some("Recovered answer."));
+    f.service.finish_stream(&f.deployment, &mut inbox).await?;
+    f.service.deliver(&f.deployment).await?;
+    let failed = f.input("UALICE", "3.0");
+    let (mut inbox, _, turn) = f.pending_turn(&failed).await?;
+    turn.finish().await?;
+    f.service.streams.lock().unwrap().insert(
+        stream_key(&f.deployment, &inbox),
+        crate::ExecutionStreamHandle::new(futures::stream::iter(vec![Err(
+            crate::turn_queue::TurnFailed("executor failed".into()).into(),
+        )])),
+    );
+    f.service.drain_stream(&f.deployment, &mut inbox).await?;
+    assert!(inbox.complete);
+    assert_eq!(
+        inbox.error,
+        Some(InboxError::TurnFailed("executor failed".into()))
+    );
+    f.service.root.shutdown().await
+}
+
+#[tokio::test]
+async fn reconnecting_after_an_error_checkpoint_preserves_failed_completion() -> Result<()> {
+    let f = Fixture::new().await?;
+    let message = f.input("UALICE", "1.0");
+    let (mut inbox, thread, turn) = f.pending_turn(&message).await?;
+    turn.add_events(vec![
+        EventData::Error {
+            message: "model failed".into(),
+            metadata: None,
+        },
+        EventData::Messages {
+            messages: vec![Message::Assistant {
+                content: AssistantContent::String("Partial answer.".into()),
+                id: None,
+            }],
+            usage: None,
+            response_id: None,
+        },
+    ])
+    .await?;
+    let checkpoint = thread
+        .get_events(Some(exoharness::EventQuery {
+            turn_id: Some(turn.record().id),
+            direction: Some(exoharness::EventQueryDirection::Desc),
+            limit: Some(1),
+            ..Default::default()
+        }))
+        .await?
+        .events[0]
+        .id;
+    turn.finish().await?;
+    let stream = f
+        .service
+        .root
+        .watch_turn(thread.as_ref(), turn.record().clone(), Some(checkpoint))
+        .await?;
+    f.service
+        .streams
+        .lock()
+        .unwrap()
+        .insert(stream_key(&f.deployment, &inbox), stream);
+    f.service.drain_stream(&f.deployment, &mut inbox).await?;
+    assert!(inbox.complete);
+    assert_eq!(
+        inbox.error,
+        Some(InboxError::TurnFailed("model failed".into()))
+    );
+    assert!(inbox.final_text.is_none());
+    f.service.root.shutdown().await
+}
+
+#[tokio::test]
+async fn malformed_observer_events_back_off_without_reposting_reconnecting() -> Result<()> {
+    let f = Fixture::new().await?;
+    let message = f.input("UALICE", "1.0");
+    let (mut inbox, thread, turn) = f.pending_turn(&message).await?;
+    turn.add_events(vec![EventData::Custom {
+        event_type: crate::permissions::APPROVAL_REQUESTED.into(),
+        payload: serde_json::json!({"malformed":true}),
+    }])
+    .await?;
+    for attempt in 1..=2 {
+        let stream = f
+            .service
+            .root
+            .watch_turn(thread.as_ref(), turn.record().clone(), inbox.cursor)
+            .await?;
+        f.service
+            .streams
+            .lock()
+            .unwrap()
+            .insert(stream_key(&f.deployment, &inbox), stream);
+        f.service.drain_stream(&f.deployment, &mut inbox).await?;
+        assert_eq!(inbox.observer_retry.as_ref().unwrap().attempts, attempt);
+        assert!(
+            inbox.observer_retry.as_ref().unwrap().retry_at
+                >= chrono::Utc::now().timestamp() + 2_i64.pow(attempt) - 1
+        );
+        f.service.deliver(&f.deployment).await?;
+    }
+    f.storage.reads.store(0, Ordering::SeqCst);
+    f.service.process_input(&f.deployment, &mut inbox).await?;
+    assert_eq!(
+        f.storage.reads.load(Ordering::SeqCst),
+        1,
+        "retry deadline must prevent replaying history"
+    );
+    assert_eq!(f.answer.0.load(Ordering::SeqCst), 0);
+    let requests = f.slack.received_requests().await.unwrap();
+    assert_eq!(
+        requests
+            .iter()
+            .filter(|request| request.url.path() == "/api/chat.startStream")
+            .count(),
+        1
+    );
+    assert!(
+        !requests
+            .iter()
+            .any(|request| request.url.path() == "/api/chat.appendStream")
+    );
+    turn.finish().await?;
+    f.service.root.shutdown().await
+}
+
+#[tokio::test]
+async fn output_commit_restores_cursor_when_the_inbox_write_fails() -> Result<()> {
+    use slack_morphism::prelude::SlackStreamChunk;
+    let f = Fixture::new().await?;
+    let message = f.input("UALICE", "1.0");
+    let (mut inbox, thread, turn) = f.pending_turn(&message).await?;
+    for text in ["One.", "Two."] {
+        turn.add_events(vec![EventData::Messages {
+            messages: vec![Message::Assistant {
+                content: AssistantContent::String(text.into()),
+                id: None,
+            }],
+            usage: None,
+            response_id: None,
+        }])
+        .await?;
+    }
+    let stream = f
+        .service
+        .root
+        .watch_turn(thread.as_ref(), turn.record().clone(), None)
+        .await?;
+    f.service
+        .streams
+        .lock()
+        .unwrap()
+        .insert(stream_key(&f.deployment, &inbox), stream);
+    *f.storage.fail.lock().unwrap() = Some(AdapterStore::inbox(&f.deployment.id, &message.id));
+    assert!(
+        f.service
+            .drain_stream(&f.deployment, &mut inbox)
+            .await
+            .is_err()
+    );
+    f.service.streams.lock().unwrap().clear();
+    inbox = f.inbox(&message).await?;
+    assert!(inbox.cursor.is_none());
+    assert!(
+        f.service
+            .queue_stream(
+                &f.deployment,
+                &inbox,
+                vec![progress::Progress::status("Waiting for model")],
+                false
+            )
+            .await
+            .is_err(),
+        "an approval/status update must not move the output receipt backwards"
+    );
+    f.service.restore_receipt(&f.deployment, &mut inbox).await?;
+    assert!(inbox.cursor.is_some());
+    turn.finish().await?;
+    let stream = f
+        .service
+        .root
+        .watch_turn(thread.as_ref(), turn.record().clone(), inbox.cursor)
+        .await?;
+    f.service
+        .streams
+        .lock()
+        .unwrap()
+        .insert(stream_key(&f.deployment, &inbox), stream);
+    f.service.drain_stream(&f.deployment, &mut inbox).await?;
+    f.service.finish_stream(&f.deployment, &mut inbox).await?;
+    let outbox = f
+        .service
+        .store
+        .get::<Outbox>(&AdapterStore::outbox(
+            &f.deployment.id,
+            &format!("{}:stream", message.id),
+        ))
+        .await?
+        .unwrap();
+    let DeliveryKind::Stream {
+        chunks, complete, ..
+    } = outbox.kind
+    else {
+        panic!("expected stream");
+    };
+    assert!(complete);
+    let text: String = chunks
+        .into_iter()
+        .filter_map(|chunk| match chunk {
+            SlackStreamChunk::MarkdownText { text } => Some(text),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(text, "One.\n\nTwo.");
+    f.service.root.shutdown().await
+}
+
+#[tokio::test]
+async fn pending_index_skips_history_and_recovers_writes_without_a_receipt() -> Result<()> {
+    let f = Fixture::new().await?;
+    for i in 1..=4 {
+        let message = f.input("UALICE", &format!("{i}.0"));
+        f.service
+            .accept(&f.deployment, message.clone(), None)
+            .await?;
+        let mut inbox = f.inbox(&message).await?;
+        inbox.complete = i != 4;
+        f.service.save_inbox(&f.deployment, &inbox).await?;
+    }
+    let prefix = format!("adapters/v1/{}/inbox", f.deployment.id);
+    assert_eq!(f.service.store.pending::<Inbox>(&prefix).await?.len(), 1);
+    f.storage.reads.store(0, Ordering::SeqCst);
+    assert_eq!(f.service.store.pending::<Inbox>(&prefix).await?.len(), 1);
+    assert_eq!(f.storage.reads.load(Ordering::SeqCst), 1);
+    let mut new = f.inbox(&f.input("UALICE", "4.0")).await?;
+    new.message = f.input("UALICE", "5.0");
+    let key = AdapterStore::inbox(&f.deployment.id, &new.message.id);
+    *f.storage.fail_after.lock().unwrap() = Some(key.clone());
+    assert!(f.service.store.save(&key, &new).await.is_err());
+    assert_eq!(f.service.store.pending::<Inbox>(&prefix).await?.len(), 2);
+    f.service.root.shutdown().await
+}
+
+#[tokio::test]
+async fn invalid_definition_does_not_hide_other_agents_and_cache_tracks_updates() -> Result<()> {
+    let f = Fixture::new().await?;
+    let harness = f.service.root.exoharness_handle();
+    let agent = harness.get_agent(&f.deployment.agent).await?.unwrap();
+    let broken = harness
+        .new_agent(exoharness::NewAgentRequest {
+            slug: "broken".into(),
+            name: "Broken".into(),
+            vaults: Vec::new(),
+        })
+        .await?;
+    broken
+        .write_artifact(exoharness::WriteArtifactRequest {
+            path: exo_managed_agents::AGENT_DEFINITION_PATH.into(),
+            contents: b"---\nadapters: broken\n---\n".to_vec(),
+        })
+        .await?;
+    let all = AdapterService::new(f.service.root.clone(), None, None).await?;
+    assert_eq!(all.desired().await?.len(), 1);
+    assert_eq!(all.webhook_paths().await?.len(), 1);
+    let first = all.definitions.load(agent.as_ref()).await?.unwrap();
+    let cached = all.definitions.load(agent.as_ref()).await?.unwrap();
+    assert!(Arc::ptr_eq(&first, &cached));
+    agent
+        .write_artifact(exoharness::WriteArtifactRequest {
+            path: exo_managed_agents::AGENT_DEFINITION_PATH.into(),
+            contents: first
+                .source()
+                .replace("use_sender_vault: true", "use_sender_vault: false")
+                .into_bytes(),
+        })
+        .await?;
+    let updated = all.definitions.load(agent.as_ref()).await?.unwrap();
+    assert!(!Arc::ptr_eq(&first, &updated));
+    let AdapterDefinition::Slack(config) = &updated.frontmatter.adapters[0];
+    assert!(!config.use_sender_vault);
+    agent
+        .write_artifact(exoharness::WriteArtifactRequest {
+            path: exo_managed_agents::AGENT_DEFINITION_PATH.into(),
+            contents: b"---\nadapters: invalid\n---\n".to_vec(),
+        })
+        .await?;
+    f.service.reconcile().await?;
+    assert!(
+        Arc::ptr_eq(
+            &f.service.deployment(&f.deployment.id).unwrap().connection,
+            &f.deployment.connection
+        ),
+        "a failed load must retain the running connection"
+    );
+    agent
+        .write_artifact(exoharness::WriteArtifactRequest {
+            path: exo_managed_agents::AGENT_DEFINITION_PATH.into(),
+            contents: b"---\nharness: basic\nmodel:\n  name: test\nadapters: []\n---\nWork\n"
+                .to_vec(),
+        })
+        .await?;
+    f.service.reconcile().await?;
+    assert!(
+        f.service.deployment(&f.deployment.id).is_none(),
+        "a successful removal must stop the adapter"
+    );
+    f.service.root.shutdown().await
+}
+
+#[tokio::test]
+async fn revoked_approval_does_not_block_other_deliveries() -> Result<()> {
+    let f = Fixture::new().await?;
+    f.private("alice", "alice@example.com").await?;
+    f.service
+        .identities
+        .execute(IdentityCommand::BindSlack {
+            workspace: "T1".into(),
+            user: "UALICE".into(),
+            account: "alice@example.com".into(),
+        })
+        .await?;
+    let grant = f
+        .service
+        .identities
+        .resolve_slack("T1", "UALICE", None)
+        .await?
+        .unwrap();
+    let message = f.input("UALICE", "1.0");
+    let (mut inbox, _, turn) = f.pending_turn(&message).await?;
+    turn.finish().await?;
+    inbox.grant = Some(grant);
+    inbox.complete = true;
+    f.service.save_inbox(&f.deployment, &inbox).await?;
+    let decision = Decision {
+        inbox: message.id.clone(),
+        turn: turn.record().clone(),
+        approval_id: "approval".into(),
+        approved: true,
+        applied: false,
+        failure: None,
+    };
+    let decision_key = format!(
+        "adapters/v1/{}/decisions/{}.json",
+        f.deployment.id,
+        digest(&format!("{}:approval:approval", message.id))
+    );
+    f.service.store.save(&decision_key, &decision).await?;
+    f.service
+        .identities
+        .execute(IdentityCommand::UnbindSlack {
+            workspace: "T1".into(),
+            user: "UALICE".into(),
+        })
+        .await?;
+    let other = f.input("UBOB", "2.0");
+    f.service
+        .queue_delivery(
+            &f.deployment,
+            &other,
+            "answer",
+            DeliveryKind::Text {
+                text: "Healthy reply.".into(),
+            },
+        )
+        .await?;
+    f.service.process(&f.deployment).await?;
+    let failed = f
+        .service
+        .store
+        .get::<Decision>(&decision_key)
+        .await?
+        .unwrap();
+    assert!(failed.failure.is_some());
+    assert!(!failed.applied);
+    let delivered = f
+        .service
+        .store
+        .get::<Outbox>(&AdapterStore::outbox(
+            &f.deployment.id,
+            &format!("{}:answer", other.id),
+        ))
+        .await?
+        .unwrap();
+    assert!(delivered.sent);
+    f.service.root.shutdown().await
+}
+
+#[tokio::test]
+async fn caller_cache_avoids_authority_writes_and_releases_idle_runtimes() -> Result<()> {
+    let f = Fixture::new().await?;
+    let message = f.input("UALICE", "1.0");
+    let (inbox, thread, turn) = f.pending_turn(&message).await?;
+    turn.finish().await?;
+    let authority = Authority {
+        deployment: f.deployment.id.clone(),
+        agent: f.deployment.agent,
+        thread: thread.record().id,
+        adapter: "slack".into(),
+        source: (&message).into(),
+        grant: None,
+    };
+    let principal = access::principal(&authority)?;
+    let first = f.service.caller_runtime(authority.clone()).await?;
+    *f.storage.fail.lock().unwrap() = Some(AdapterStore::authority(&principal));
+    let again = f.service.caller_runtime(authority).await?;
+    assert!(Arc::ptr_eq(&first, &again));
+    assert_eq!(f.answer.1.load(Ordering::SeqCst), 1);
+    drop(first);
+    drop(again);
+    f.service
+        .callers
+        .lock()
+        .unwrap()
+        .get_mut(&principal)
+        .unwrap()
+        .last_used -= std::time::Duration::from_secs(600);
+    f.service.touch_caller(&f.deployment, &inbox)?;
+    f.service.prune_callers().await;
+    assert_eq!(f.service.callers.lock().unwrap().len(), 1);
+    f.service
+        .callers
+        .lock()
+        .unwrap()
+        .get_mut(&principal)
+        .unwrap()
+        .last_used -= std::time::Duration::from_secs(600);
+    f.service.prune_callers().await;
+    assert!(f.service.callers.lock().unwrap().is_empty());
+    f.service.root.shutdown().await
+}
+
+#[tokio::test]
+async fn removing_sender_access_closes_the_existing_stream_even_if_inbox_save_fails() -> Result<()>
+{
+    let f = Fixture::new().await?;
+    let message = f.input("UALICE", "1.0");
+    let (mut inbox, thread, turn) = f.pending_turn(&message).await?;
+    f.service
+        .store
+        .put(
+            &AdapterStore::route(&f.deployment.id, &message),
+            &Route {
+                thread: Some(thread.record().id),
+            },
+        )
+        .await?;
+    f.service
+        .queue_stream(
+            &f.deployment,
+            &inbox,
+            vec![progress::Progress::status("Queued")],
+            false,
+        )
+        .await?;
+    f.service.deliver(&f.deployment).await?;
+    let agent = f
+        .service
+        .root
+        .exoharness_handle()
+        .get_agent(&f.deployment.agent)
+        .await?
+        .unwrap();
+    let definition = exo_managed_agents::load_definition(agent.as_ref())
+        .await?
+        .unwrap();
+    agent
+        .write_artifact(exoharness::WriteArtifactRequest {
+            path: exo_managed_agents::AGENT_DEFINITION_PATH.into(),
+            contents: definition
+                .source()
+                .replace(
+                    "use_sender_vault: true",
+                    "use_sender_vault: true\n    allowed_users: []",
+                )
+                .into_bytes(),
+        })
+        .await?;
+    *f.storage.fail.lock().unwrap() = Some(AdapterStore::inbox(&f.deployment.id, &message.id));
+    assert!(
+        f.service
+            .process_input(&f.deployment, &mut inbox)
+            .await
+            .is_err()
+    );
+    // Recovery uses the stream receipt even though the inbox write was lost.
+    inbox = f.inbox(&message).await?;
+    assert!(!inbox.complete);
+    f.service.process_input(&f.deployment, &mut inbox).await?;
+    assert!(inbox.complete);
+    assert_eq!(inbox.error, Some(InboxError::AccessRemoved));
+    f.service.deliver(&f.deployment).await?;
+    let requests = f.slack.received_requests().await.unwrap();
+    let stops: Vec<_> = requests
+        .iter()
+        .filter(|request| request.url.path() == "/api/chat.stopStream")
+        .collect();
+    assert_eq!(stops.len(), 1);
+    #[derive(serde::Deserialize)]
+    struct Stop {
+        ts: String,
+        chunks: Vec<slack_morphism::prelude::SlackStreamChunk>,
+    }
+    let stopped: Stop = serde_json::from_slice(&stops[0].body)?;
+    assert_eq!(stopped.ts, "2.0");
+    assert!(stopped.chunks.iter().any(|chunk| matches!(chunk, slack_morphism::prelude::SlackStreamChunk::TaskUpdate { title, status, .. } if title == "Access removed" && *status == slack_morphism::prelude::SlackTaskCardStatus::Error)));
+    assert!(
+        !requests
+            .iter()
+            .any(|request| request.url.path() == "/api/chat.postMessage")
+    );
+    assert!(
+        f.service
+            .store
+            .pending::<Outbox>(&format!("adapters/v1/{}/outbox", f.deployment.id))
+            .await?
+            .iter()
+            .all(|delivery| !matches!(delivery.kind, DeliveryKind::Stream { .. }))
+    );
+    turn.finish().await?;
+    f.service.root.shutdown().await
+}
+
+#[tokio::test]
+async fn grid_members_in_other_workspaces_are_internal_but_slack_connect_is_not() -> Result<()> {
+    use wiremock::matchers::query_param;
+    let f = Fixture::with_enterprise(Some("E1")).await?;
+    for (sender, enterprise, stranger) in [("UGRID", "E1", true), ("UFOREIGN", "E2", false)] {
+        Mock::given(path("/api/users.info")).and(query_param("user", sender))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"ok":true,"user":{"id":sender,"team_id":"T2","is_stranger":stranger,"enterprise_user":{"id":sender,"enterprise_id":enterprise}}})))
+            .with_priority(1).mount(&f.slack).await;
+    }
+    Mock::given(path("/api/conversations.info"))
+        .and(query_param("channel", "GEXTERNAL"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(
+            serde_json::json!({"ok":true,"channel":{"is_mpim":true,"is_ext_shared":true}}),
+        ))
+        .mount(&f.slack)
+        .await;
+    for (sender, channel, ts) in [
+        ("UGRID", "D1", "1.0"),
+        ("UFOREIGN", "D1", "2.0"),
+        ("UGRID", "GEXTERNAL", "3.0"),
+    ] {
+        f.deployment.connection.push(&f.service, &f.deployment, serde_json::from_value(serde_json::json!({"team_id":"T1","api_app_id":"A1","event_id":format!("Ev{ts}"),"event_time":1700000000,"event":{"type":"message","user":sender,"channel":channel,"ts":ts,"text":"hello"}}))?).await?;
+    }
+    let inbox = f
+        .service
+        .store
+        .pending::<Inbox>(&format!("adapters/v1/{}/inbox", f.deployment.id))
+        .await?;
+    assert_eq!(inbox.len(), 1);
+    assert_eq!(inbox[0].message.sender, "UGRID");
+    assert!(!inbox[0].message.external);
+    f.service.root.shutdown().await
+}
+
+#[tokio::test]
+async fn external_dms_and_group_dms_require_explicit_slack_connect_admission() -> Result<()> {
+    use wiremock::matchers::query_param;
+    let f = Fixture::new().await?;
+    for (sender, team, stranger) in [
+        ("UFOREIGN", "T2", false),
+        ("USTRANGER", "T1", true),
+        ("UALICE", "T1", false),
+    ] {
+        Mock::given(path("/api/users.info")).and(query_param("user", sender)).respond_with(ResponseTemplate::new(200).set_body_json(
+            serde_json::json!({"ok":true,"user":{"id":sender,"team_id":team,"is_stranger":stranger}})
+        )).with_priority(1).mount(&f.slack).await;
+    }
+    Mock::given(path("/api/conversations.info"))
+        .and(query_param("channel", "GEXTERNAL"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(
+            serde_json::json!({"ok":true,"channel":{"is_mpim":true,"is_ext_shared":true}}),
+        ))
+        .mount(&f.slack)
+        .await;
+    for (sender, channel, ts) in [
+        ("UFOREIGN", "D1", "1.0"),
+        ("USTRANGER", "D1", "2.0"),
+        ("UALICE", "GEXTERNAL", "3.0"),
+        ("UALICE", "D1", "4.0"),
+    ] {
+        let event = serde_json::from_value(
+            serde_json::json!({"team_id":"T1","api_app_id":"A1","event_id":format!("Ev{ts}"),"event_time":1700000000,"event":{"type":"message","user":sender,"channel":channel,"ts":ts,"text":"hello"}}),
+        )?;
+        f.deployment
+            .connection
+            .push(&f.service, &f.deployment, event)
+            .await?;
+    }
+    let inbox = f
+        .service
+        .store
+        .pending::<Inbox>(&format!("adapters/v1/{}/inbox", f.deployment.id))
+        .await?;
+    assert_eq!(inbox.len(), 1);
+    assert_eq!(inbox[0].message.message_ts, "4.0");
+    assert!(!inbox[0].message.external);
+    f.service.root.shutdown().await
 }
 
 #[tokio::test]

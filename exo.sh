@@ -39,7 +39,6 @@ USE_SANDBOX=true
 PULL_SANDBOX=false
 START_SCHEDULER="${EXO_START_SCHEDULER:-true}"
 START_ADAPTERS="${EXO_START_ADAPTERS:-true}"
-ADAPTER_LIMIT="${EXO_ADAPTER_LIMIT:-50}"
 CONTROL=false
 SETUP_PROFILE=false
 SKIP_BUILD="${EXO_SKIP_BUILD:-false}"
@@ -47,11 +46,6 @@ TEMPLATE="${EXO_TEMPLATE:-canonical}"
 PROFILE="${EXO_PROFILE:-practical}"
 PROVIDER_EXPLICIT=false
 declare -a CONTROL_PIDS=()
-SETUP_ADAPTER="${EXO_SETUP_ADAPTER:-}"
-declare -a SETUP_ADAPTERS=()
-if [[ -n "$SETUP_ADAPTER" ]]; then
-  SETUP_ADAPTERS+=("$SETUP_ADAPTER")
-fi
 INITIAL_PROMPT_FILE="${EXO_INITIAL_PROMPT_FILE:-}"
 MODEL_CREDENTIAL="openai"
 MODEL_BASE_URL=""
@@ -72,8 +66,8 @@ Usage:
   ./exo.sh setup-sandbox
 
 Default behavior starts the canonical stack: it creates or reuses an Exo
-agent and conversation with a Docker sandbox, repo self-map mount, ExoChat
-setup, guardian config, and control logs, starts the local scheduler and
+agent and conversation with a Docker sandbox, repo self-map mount,
+guardian config, and control logs, starts the local scheduler and
 adapter loops, then starts a REPL. It reads .env by default if present.
 Choose a different template with --template.
 
@@ -102,11 +96,10 @@ Options:
   --conversation-name <name>   Conversation display name (default: Dev)
   --module <path>              Exo TypeScript harness module
   --template <name>            Launch template (default: canonical):
-                                 canonical  Docker sandbox, repo self-map mount, ExoChat
-                                            setup, control logs, and guardian config
-                                 dev        Same as canonical but with IRC+Discord
-                                            instead of ExoChat
-                                 minimal    No Docker defaults, adapter setup prompts,
+                                 canonical  Docker sandbox, repo self-map mount,
+                                            control logs, and guardian config
+                                 dev        Same as canonical
+                                 minimal    No Docker defaults,
                                             control console, or guardian config
   --profile <name>             Checked-in tool profile: practical (default) or bootstrap
   --sandbox-image <image>      Sandbox image (default: ubuntu:24.04)
@@ -123,16 +116,9 @@ Options:
   --scheduler                  Start the local scheduled task runner
   --no-adapters                Do not start the local adapter runner
   --adapters                   Start the local adapter runner
-  --adapter-limit <n>          Max adapters supervised by the runner (default: 50)
   --control                    Show live scheduler and adapter logs beside the REPL
   --setup-profile              Prompt once and write the ignored local profile prompt
   --local-prompt-file <path>    Local profile prompt path (default: .exo/exo-profile.md)
-  --setup <adapter>            Send adapters/<adapter>/setup-prompt.md.
-                                May be passed more than once.
-  --setup-all                  Equivalent to --setup exochat --setup signal
-                               --setup whatsapp --setup irc --setup discord.
-                                For exochat, print a browser URL; for whatsapp/signal,
-                                print pairing QR and pause.
   --initial-prompt-file <path> Send this file as the first message before REPL
   --pull-sandbox               Pull the sandbox image before starting
   --skip-build                 Do not build the exo CLI before starting; requires
@@ -150,8 +136,8 @@ Environment overrides:
   EXO_SHELL_PROGRAM, EXO_SANDBOX_SCOPE, EXO_ENV_FILE, EXO_LOCAL_PROMPT_FILE,
   EXO_BIN, EXO_START_SCHEDULER, EXO_START_ADAPTERS, EXO_REPO,
   EXO_AGENT_CLI_ROOT, EXO_AGENT_CLI_MOUNT,
-  EXO_SCHEDULER_BIN, EXO_SCHEDULER_INTERVAL_SECONDS, EXO_ADAPTER_LIMIT,
-  EXO_SETUP_ADAPTER, EXO_INITIAL_PROMPT_FILE, EXO_TEMPLATE, EXO_PROFILE,
+  EXO_SCHEDULER_BIN, EXO_SCHEDULER_INTERVAL_SECONDS,
+  EXO_INITIAL_PROMPT_FILE, EXO_TEMPLATE, EXO_PROFILE,
   EXO_SKIP_BUILD, EXO_USER_NAME
 EOF
 }
@@ -205,48 +191,6 @@ ensure_scheduler_bin() {
   build_exo_scheduler
 }
 
-ensure_signal_cli() {
-  if ! setup_requested "signal"; then
-    return
-  fi
-  if ! command -v signal-cli >/dev/null 2>&1; then
-    die "signal-cli is required for --setup signal. Install it first, for example: brew install signal-cli"
-  fi
-
-  local signal_cli_path
-  signal_cli_path="$(command -v signal-cli)"
-  if command -v file >/dev/null 2>&1 && file "$signal_cli_path" | grep -q "Mach-O"; then
-    echo "Warning: $signal_cli_path appears to be a native signal-cli executable."
-    echo "If outbound sends fail with NETWORK_FAILURE, use the JVM signal-cli distribution instead."
-  fi
-}
-
-setup_requested() {
-  local adapter="$1"
-  local requested
-  if [[ "${#SETUP_ADAPTERS[@]}" -eq 0 ]]; then
-    return 1
-  fi
-  for requested in "${SETUP_ADAPTERS[@]}"; do
-    if [[ "$requested" == "$adapter" ]]; then
-      return 0
-    fi
-  done
-  return 1
-}
-
-add_setup_adapter() {
-  local adapter="$1"
-  [[ -n "$adapter" ]] || die "--setup requires an adapter name"
-  if [[ ! "$adapter" =~ ^[a-zA-Z0-9_-]+$ ]]; then
-    die "--setup must be an adapter name, not a path: $adapter"
-  fi
-  if setup_requested "$adapter"; then
-    return
-  fi
-  SETUP_ADAPTERS+=("$adapter")
-}
-
 apply_template_defaults() {
   if [[ "$TEMPLATE" == "minimal" ]]; then
     return
@@ -261,12 +205,7 @@ apply_template_defaults() {
     PROVIDER="docker"
   fi
   case "$TEMPLATE" in
-    canonical)
-      add_setup_adapter "exochat"
-      ;;
-    dev)
-      add_setup_adapter "irc"
-      add_setup_adapter "discord"
+    canonical|dev)
       ;;
     *)
       die "--template must be canonical, dev, or minimal"
@@ -283,8 +222,7 @@ configure_guardian_for_current_launch() {
     --env-file "$ENV_FILE" \
     --exo-bin "$EXO_BIN" \
     --scheduler-bin "$SCHEDULER_BIN" \
-    --scheduler-interval "$SCHEDULER_INTERVAL_SECONDS" \
-    --adapter-limit "$ADAPTER_LIMIT" >/dev/null
+    --scheduler-interval "$SCHEDULER_INTERVAL_SECONDS" >/dev/null
   echo "Configured guardian for Docker-backed Exo services."
 }
 
@@ -368,14 +306,6 @@ adapters_pid_file() {
   echo "$ROOT_DIR/.exo/exo-adapters.pid"
 }
 
-adapters_restart_file() {
-  echo "$ROOT_DIR/.exo/exo-adapters.restart"
-}
-
-reboot_notice_file() {
-  echo "$ROOT_DIR/.exo/exo-reboot-notice.json"
-}
-
 adapters_log_file() {
   echo "$ROOT_DIR/.exo/exo-adapters.log"
 }
@@ -408,27 +338,10 @@ adapters_process_running() {
     terminate_process_tree "$pid"
     return 1
   fi
-  if adapter_source_newer_than "$pid_file"; then
-    echo "Restarting adapter runner because adapter code changed..."
-    terminate_process_tree "$pid"
-    return 1
-  fi
   command_line="$(ps -p "$pid" -o command= 2>/dev/null || true)"
-  [[ "$command_line" == "$EXO_BIN serve "* && "$command_line" == *" --adapters-only"* ]]
+  [[ "$command_line" == "$EXO_BIN "* && "$command_line" == *" run "* && "$command_line" == *" --serve"* && "$command_line" == *" --adapters-only"* ]]
 }
 
-adapter_source_newer_than() {
-  local target="$1"
-  local path
-  for path in \
-    "$ROOT_DIR/exo/adapters/protocol.ts" \
-    "$ROOT_DIR/exo/adapters"/*/worker.ts; do
-    if [[ -e "$path" && "$path" -nt "$target" ]]; then
-      return 0
-    fi
-  done
-  return 1
-}
 
 ensure_scheduler() {
   if [[ "$START_SCHEDULER" != true ]]; then
@@ -469,9 +382,6 @@ ensure_adapters() {
   nohup "$EXO_BIN" "${EXO_ARGS[@]}" --harness "$HARNESS" \
     "$AGENT" \
       --adapters-only \
-      --adapter-limit "$ADAPTER_LIMIT" \
-      --drain-marker "$(adapters_restart_file)" \
-      --reboot-notice "$(reboot_notice_file)" \
     >>"$log_file" 2>&1 &
   echo "$!" >"$pid_file"
   echo "Adapter log: $log_file"
@@ -689,7 +599,6 @@ stop_adapters() {
     fi
   fi
   pkill -f '(^|/)exo run .*--serve.*--adapters-only([[:space:]]|$)' >/dev/null 2>&1 || true
-  pkill -f "tsx exo/adapters/.*/worker.ts" >/dev/null 2>&1 || true
   rm -f "$pid_file"
 }
 
@@ -833,7 +742,6 @@ run_repl() {
   if [[ "$SETUP_PROFILE" == true ]]; then
     setup_local_profile
   fi
-  ensure_signal_cli
   if [[ "$USE_SANDBOX" == true ]]; then
     ensure_sandbox_image
   fi
@@ -847,9 +755,6 @@ run_repl() {
   adapter_log_start_line="$(adapter_log_line_count)"
   send_startup_prompt
   ensure_adapters
-  show_exochat_url_if_needed "$adapter_log_start_line"
-  show_signal_qr_if_needed "$adapter_log_start_line"
-  show_whatsapp_qr_if_needed "$adapter_log_start_line"
   if [[ "$CONTROL" == true ]]; then
     run_control_repl "$scheduler_log_start_line" "$adapter_log_start_line"
   else
@@ -993,50 +898,10 @@ startup_prompt_file() {
   printf '%s\n' "$path"
 }
 
-adapter_setup_prompt_file() {
-  local adapter="$1"
-  if [[ ! "$adapter" =~ ^[a-zA-Z0-9_-]+$ ]]; then
-    die "--setup must be an adapter name, not a path: $adapter"
-  fi
-  startup_prompt_file "$ROOT_DIR/exo/adapters/$adapter/setup-prompt.md"
-}
-
 send_startup_prompt() {
-  if [[ "${#SETUP_ADAPTERS[@]}" -eq 0 && -z "$INITIAL_PROMPT_FILE" ]]; then
-    return
-  fi
-
-  local adapter
-  for adapter in "${SETUP_ADAPTERS[@]}"; do
-    send_adapter_setup_prompt "$adapter"
-  done
-
   if [[ -n "$INITIAL_PROMPT_FILE" ]]; then
     send_prompt_from_files "$(startup_prompt_file "$INITIAL_PROMPT_FILE")"
   fi
-}
-
-send_adapter_setup_prompt() {
-  local adapter="$1"
-  local file prompt
-  file="$(adapter_setup_prompt_file "$adapter")"
-  prompt="$(<"$file")"
-
-  # The agent-cli setup prompt asks for the host workspace root, which the
-  # sandboxed agent cannot determine on its own. Inject it when known so the
-  # non-interactive setup can complete without waiting for an answer.
-  if [[ "$adapter" == "agent-cli" ]]; then
-    if [[ -z "$AGENT_CLI_MOUNT_ROOT" ]]; then
-      die "--setup agent-cli requires --agent-cli-mount <host-dir> so the host workspace root can be provided to the agent"
-    fi
-    prompt+=$'\n\n'"The host workspace root bind-mounted at $AGENT_CLI_MOUNT_PATH is: $AGENT_CLI_MOUNT_ROOT"
-  fi
-
-  if [[ -z "${prompt//[[:space:]]/}" ]]; then
-    die "startup prompt is empty: $file"
-  fi
-  echo "Sending startup prompt from: $file"
-  exo thread send "$AGENT" "$CONVERSATION" "$prompt"
 }
 
 send_prompt_from_files() {
@@ -1054,146 +919,6 @@ send_prompt_from_files() {
 
   echo "Sending startup prompt from: ${files[*]}"
   exo thread send "$AGENT" "$CONVERSATION" "$prompt"
-}
-
-show_whatsapp_qr_if_needed() {
-  if ! setup_requested "whatsapp"; then
-    return
-  fi
-
-  local start_line="${1:-0}"
-  local log_file
-  log_file="$(adapters_log_file)"
-  echo "Waiting for WhatsApp QR code in $log_file..."
-
-  local attempt qr
-  for attempt in {1..30}; do
-    if [[ -f "$log_file" ]]; then
-      qr="$(awk -v start="$start_line" '
-        NR <= start { next }
-        /\[whatsapp-adapter\] Scan this QR with WhatsApp:/ {
-          capture = 1
-          block = $0 "\n"
-          next
-        }
-        capture {
-          if ($0 ~ /^\[[^]]+-adapter\]/) {
-            capture = 0
-            next
-          }
-          block = block $0 "\n"
-        }
-        END {
-          if (block != "") {
-            printf "%s", block
-          }
-        }
-      ' "$log_file")"
-      if [[ -n "$qr" ]]; then
-        echo
-        printf '%s\n' "$qr"
-        echo "Scan this QR from WhatsApp: Settings > Linked devices > Link a device."
-        echo
-        read -r -p "Press Enter after WhatsApp finishes linking the device..."
-        return
-      fi
-    fi
-    sleep 1
-  done
-
-  echo "No WhatsApp QR code found yet. The adapter may already be paired, or it may still be starting."
-  echo "Watch the adapter log with: tail -f $log_file"
-  read -r -p "Press Enter to continue to the REPL..."
-}
-
-show_exochat_url_if_needed() {
-  if ! setup_requested "exochat"; then
-    return
-  fi
-
-  local start_line="${1:-0}"
-  local log_file
-  log_file="$(adapters_log_file)"
-  echo "Waiting for ExoChat URL in $log_file..."
-
-  local attempt url
-  for attempt in {1..30}; do
-    if [[ -f "$log_file" ]]; then
-      url="$(awk -v start="$start_line" '
-        NR <= start { next }
-        /\[exochat-adapter\] Open this ExoChat URL/ {
-          capture = 1
-          next
-        }
-        capture && /^https?:\/\// {
-          print
-          exit
-        }
-      ' "$log_file")"
-      if [[ -n "$url" ]]; then
-        echo
-        echo "Open this ExoChat URL in a browser or on your phone:"
-        printf '%s\n' "$url"
-        echo
-        read -r -p "Press Enter after opening ExoChat..."
-        return
-      fi
-    fi
-    sleep 1
-  done
-
-  echo "No ExoChat URL found yet. Watch the adapter log with: tail -f $log_file"
-  read -r -p "Press Enter to continue to the REPL..."
-}
-
-show_signal_qr_if_needed() {
-  if ! setup_requested "signal"; then
-    return
-  fi
-
-  local start_line="${1:-0}"
-  local log_file
-  log_file="$(adapters_log_file)"
-  echo "Waiting for Signal linked-device QR code in $log_file..."
-
-  local attempt qr
-  for attempt in {1..30}; do
-    if [[ -f "$log_file" ]]; then
-      qr="$(awk -v start="$start_line" '
-        NR <= start { next }
-        /\[signal-adapter\] Scan this QR with Signal:/ {
-          capture = 1
-          block = $0 "\n"
-          next
-        }
-        capture {
-          if ($0 ~ /^\[[^]]+-adapter\]/) {
-            capture = 0
-            next
-          }
-          block = block $0 "\n"
-        }
-        END {
-          if (block != "") {
-            printf "%s", block
-          }
-        }
-      ' "$log_file")"
-      if [[ -n "$qr" ]]; then
-        echo
-        printf '%s\n' "$qr"
-        echo "Scan this QR from Signal: Settings > Linked devices > Link new device."
-        echo
-        read -r -p "Press Enter after Signal finishes linking the device..."
-        return
-      fi
-    fi
-    sleep 1
-  done
-
-  echo "No Signal QR code found yet. The adapter may already be linked, signal-cli may be missing, or it may still be starting."
-  echo "Watch the adapter log with: tail -f $log_file"
-  read -r -p "Press Enter to continue to the REPL..."
 }
 
 while [[ $# -gt 0 ]]; do
@@ -1374,11 +1099,6 @@ while [[ $# -gt 0 ]]; do
       START_ADAPTERS=true
       shift
       ;;
-    --adapter-limit)
-      ADAPTER_LIMIT="${2:-}"
-      [[ "$ADAPTER_LIMIT" =~ ^[0-9]+$ && "$ADAPTER_LIMIT" -gt 0 ]] || die "--adapter-limit requires a positive integer"
-      shift 2
-      ;;
     --control)
       CONTROL=true
       shift
@@ -1391,18 +1111,6 @@ while [[ $# -gt 0 ]]; do
       LOCAL_PROMPT_FILE="${2:-}"
       [[ -n "$LOCAL_PROMPT_FILE" ]] || die "--local-prompt-file requires a value"
       shift 2
-      ;;
-    --setup)
-      add_setup_adapter "${2:-}"
-      shift 2
-      ;;
-    --setup-all)
-      add_setup_adapter "exochat"
-      add_setup_adapter "signal"
-      add_setup_adapter "whatsapp"
-      add_setup_adapter "irc"
-      add_setup_adapter "discord"
-      shift
       ;;
     --initial-prompt-file)
       INITIAL_PROMPT_FILE="${2:-}"

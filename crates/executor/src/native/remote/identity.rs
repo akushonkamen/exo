@@ -69,8 +69,9 @@ impl IdentityRegistry {
                 ensure!(
                     vault.record().name != "global"
                         && vault.record().id != self.store.vault_id()
-                        && !next.protected_vaults.contains(&vault.record().id),
-                    "global and server-state vaults cannot be assigned to a user"
+                        && !next.protected_vaults.contains(&vault.record().id)
+                        && !next.shared_vaults.contains(&vault.record().id),
+                    "global, shared, and server-state vaults cannot be assigned to a user"
                 );
                 for agent in self.harness.list_agents().await? {
                     if let Some(definition) =
@@ -91,8 +92,38 @@ impl IdentityRegistry {
                     .find(|p| p.email.eq_ignore_ascii_case(&email))
                 {
                     Some(principal) => principal.id.clone(),
+                    None if self.auth.as_ref().is_some_and(|auth| {
+                        auth.config.owner_email.eq_ignore_ascii_case(&email)
+                    }) =>
+                    {
+                        next.owner.clone()
+                    }
                     None => Uuid7::now().to_string(),
                 };
+                ensure!(
+                    !next.principals.values().any(|principal|
+                        principal.vault == vault.record().id && principal.id != id),
+                    "vault is already assigned to another user"
+                );
+                ensure!(
+                    next.vault_owners
+                        .get(&vault.record().id)
+                        .is_none_or(|owner| owner == &next.owner || owner == &id),
+                    "vault is owned by another user; bind a vault owned by the server operator or this user"
+                );
+                if let Some(previous) = next.principals.get(&id)
+                    && previous.vault != vault.record().id
+                {
+                    let previous_vault =
+                        exoharness::vault::require_vault(self.harness.as_ref(), &previous.vault)
+                            .await?;
+                    let name = if previous_vault.record().name == "personal" {
+                        format!("personal-{}", previous.vault)
+                    } else {
+                        previous_vault.record().name.clone()
+                    };
+                    next.vault_names.insert(previous.vault, name);
+                }
                 next.principals
                     .entry(id.clone())
                     .and_modify(|p| p.vault = vault.record().id)
@@ -226,6 +257,9 @@ impl IdentityRegistry {
         principal
             .filter(|p| {
                 state.vault_owners.get(&p.vault) == Some(&p.id)
+                    && !state.shared_vaults.contains(&p.vault)
+                    && !state.protected_vaults.contains(&p.vault)
+                    && p.vault != self.store.vault_id()
                     && self
                         .auth
                         .as_ref()

@@ -409,12 +409,14 @@ async fn reusable_sandbox_process(
     desired_sandbox_id: &SandboxId,
 ) -> Result<Option<(SandboxProcessId, bool, Option<u64>)>> {
     let mut cursor = None;
-    for _ in 0..100 {
+    let mut examined = 0;
+    let mut limit = 1;
+    while examined < 100 {
         let page = conversation
             .get_events(Some(EventQuery {
                 cursor,
                 direction: Some(EventQueryDirection::Desc),
-                limit: Some(1),
+                limit: Some(limit),
                 session_id: None,
                 turn_id: None,
                 types: Some(vec![EventKind::custom(
@@ -422,39 +424,43 @@ async fn reusable_sandbox_process(
                 )]),
             }))
             .await?;
-        let Some(event) = page.events.into_iter().next() else {
+        if page.events.is_empty() {
             break;
-        };
-        cursor = Some(event.id);
-        let EventData::Custom {
-            event_type,
-            payload,
-        } = event.data
-        else {
-            continue;
-        };
-        if event_type != TYPESCRIPT_SANDBOX_PROCESS_REUSE_EVENT {
-            continue;
         }
-        let candidate: TypeScriptSandboxProcessReuseEvent = serde_json::from_value(payload)?;
-        if candidate.reuse_key != reuse_key || candidate.sandbox_id != *desired_sandbox_id {
-            continue;
-        }
-        let status = latest_sandbox_process_event_cursor(
-            conversation,
-            candidate.sandbox_id.clone(),
-            candidate.process_id.clone(),
-        )
-        .await;
-        let Ok(status) = status else {
+        for event in page.events.into_iter().take(100 - examined) {
+            examined += 1;
+            cursor = Some(event.id);
+            let EventData::Custom {
+                event_type,
+                payload,
+            } = event.data
+            else {
+                continue;
+            };
+            if event_type != TYPESCRIPT_SANDBOX_PROCESS_REUSE_EVENT {
+                continue;
+            }
+            let candidate: TypeScriptSandboxProcessReuseEvent = serde_json::from_value(payload)?;
+            if candidate.reuse_key != reuse_key || candidate.sandbox_id != *desired_sandbox_id {
+                continue;
+            }
+            let status = latest_sandbox_process_event_cursor(
+                conversation,
+                candidate.sandbox_id.clone(),
+                candidate.process_id.clone(),
+            )
+            .await;
+            let Ok(status) = status else {
+                return Ok(None);
+            };
+            if status.status.is_running() {
+                return Ok(Some((candidate.process_id, true, status.cursor)));
+            }
+            // A newer generation replaced this reuse slot. Older processes carry
+            // stale execution state, even if one of them is still running.
             return Ok(None);
-        };
-        if status.status.is_running() {
-            return Ok(Some((candidate.process_id, true, status.cursor)));
         }
-        // A newer generation replaced this reuse slot. Older processes carry
-        // stale execution state, even if one of them is still running.
-        return Ok(None);
+        limit = 16;
     }
 
     Ok(None)
@@ -841,6 +847,26 @@ mod reuse_tests {
             })
             .await?;
         assert_eq!(exited, SandboxProcessStatus::Exited { exit_code: 0 });
+        // Other harness slots can bury this slot's latest generation in history.
+        // Paging must find that exited generation, not its older live process.
+        thread
+            .add_events(AddEventsRequest {
+                session_id: None,
+                turn_id: None,
+                data: (0..40)
+                    .map(|_| {
+                        Ok(EventData::Custom {
+                            event_type: TYPESCRIPT_SANDBOX_PROCESS_REUSE_EVENT.into(),
+                            payload: serde_json::to_value(TypeScriptSandboxProcessReuseEvent {
+                                reuse_key: "other".into(),
+                                sandbox_id: sandbox_id.clone(),
+                                process_id: processes[0].clone(),
+                            })?,
+                        })
+                    })
+                    .collect::<Result<Vec<_>>>()?,
+            })
+            .await?;
         assert!(
             reusable_sandbox_process(thread.as_ref(), "codex", &sandbox_id)
                 .await?
