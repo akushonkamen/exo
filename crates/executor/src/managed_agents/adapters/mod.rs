@@ -722,6 +722,7 @@ impl AdapterService {
                         .clone(),
                 },
                 sent: false,
+                failure: None,
                 attempts: 0,
                 retry_at: 0,
                 external_id: None,
@@ -781,6 +782,7 @@ impl AdapterService {
                         ),
                         kind,
                         sent: false,
+                        failure: None,
                         attempts: 0,
                         retry_at: 0,
                         external_id: None,
@@ -822,6 +824,7 @@ impl AdapterService {
                         text,
                     },
                     sent: false,
+                    failure: None,
                     attempts: 0,
                     retry_at: 0,
                     external_id: None,
@@ -876,6 +879,7 @@ impl AdapterService {
     }
     async fn deliver_one(&self, deployment: &Deployment, mut delivery: Outbox) -> Result<()> {
         if delivery.sent
+            || delivery.failure.is_some()
             || delivery.account != deployment.connection.account
             || delivery.retry_at > chrono::Utc::now().timestamp()
         {
@@ -940,24 +944,29 @@ impl AdapterService {
             }
             Err(error) => {
                 delivery.attempts = delivery.attempts.saturating_add(1);
-                if matches!(
+                let slack_error = error.downcast_ref::<slack_morphism::errors::SlackClientError>();
+                if let Some(slack_morphism::errors::SlackClientError::ApiError(api)) = slack_error
+                    && matches!(
+                        api.code.as_str(),
+                        "invalid_thread_ts" | "thread_not_found" | "message_not_found"
+                    )
+                {
+                    delivery.failure = Some(api.code.clone());
+                } else if matches!(
                     delivery.kind,
                     DeliveryKind::Reaction { .. } | DeliveryKind::Status { .. }
                 ) {
                     delivery.sent = true;
                 }
-                let delay =
-                    match error.downcast_ref::<slack_morphism::errors::SlackClientError>() {
-                        Some(slack_morphism::errors::SlackClientError::RateLimitError(limit)) => {
-                            limit
-                                .retry_after
-                                .map(|delay| delay.as_secs().min(i64::MAX as u64) as i64)
-                        }
-                        _ => None,
-                    }
-                    .unwrap_or_else(|| i64::from(2u32.saturating_pow(delivery.attempts.min(8))));
+                let delay = match slack_error {
+                    Some(slack_morphism::errors::SlackClientError::RateLimitError(limit)) => limit
+                        .retry_after
+                        .map(|delay| delay.as_secs().min(i64::MAX as u64) as i64),
+                    _ => None,
+                }
+                .unwrap_or_else(|| i64::from(2u32.saturating_pow(delivery.attempts.min(8))));
                 delivery.retry_at = chrono::Utc::now().timestamp().saturating_add(delay);
-                tracing::warn!(adapter = deployment.definition.name(), %error, "adapter delivery failed");
+                tracing::warn!(adapter = deployment.definition.name(), delivery = %delivery.id, channel = %delivery.channel, terminal = delivery.failure.is_some(), %error, "adapter delivery failed");
             }
         }
         self.store

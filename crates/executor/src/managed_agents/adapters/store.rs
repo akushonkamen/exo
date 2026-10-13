@@ -107,6 +107,7 @@ pub struct Outbox {
     pub reply_ts: Option<String>,
     pub kind: DeliveryKind,
     pub sent: bool,
+    pub failure: Option<String>,
     pub attempts: u32,
     pub retry_at: i64,
     pub external_id: Option<String>,

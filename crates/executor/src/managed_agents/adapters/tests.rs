@@ -788,6 +788,81 @@ async fn live_text_and_recovered_tools_share_one_reply_across_delivery_retry() -
 }
 
 #[tokio::test]
+async fn deleted_slack_threads_stop_delivery_without_discarding_the_reply() -> Result<()> {
+    use slack_morphism::prelude::SlackStreamChunk;
+    let f = Fixture::new().await?;
+    Mock::given(path("/api/chat.startStream"))
+        .and(wiremock::matchers::body_partial_json(
+            serde_json::json!({"thread_ts": "1.0"}),
+        ))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(serde_json::json!({"ok":false,"error":"invalid_thread_ts"})),
+        )
+        .with_priority(1)
+        .expect(1)
+        .mount(&f.slack)
+        .await;
+    let message = f.input("UALICE", "1.0");
+    f.service
+        .accept(&f.deployment, message.clone(), None)
+        .await?;
+    f.service
+        .queue_stream(
+            &f.deployment,
+            &f.inbox(&message).await?,
+            vec![SlackStreamChunk::MarkdownText { text: "2.".into() }],
+            true,
+        )
+        .await?;
+    f.service.deliver(&f.deployment).await?;
+    let key = AdapterStore::outbox(&f.deployment.id, &format!("{}:stream", message.id));
+    let failed = f.service.store.get::<Outbox>(&key).await?.unwrap();
+    assert_eq!(failed.failure.as_deref(), Some("invalid_thread_ts"));
+    assert!(!failed.sent);
+    assert!(failed.external_id.is_none());
+    assert!(
+        matches!(&failed.kind, DeliveryKind::Stream { chunks, complete: true, .. }
+        if matches!(chunks.as_slice(), [SlackStreamChunk::MarkdownText { text }] if text == "2."))
+    );
+
+    // A new service reads the failure from storage and leaves it stopped.
+    let mut restarted = AdapterService::new(f.service.root.clone(), None, None).await?;
+    Arc::get_mut(&mut restarted).unwrap().store = f.service.store.clone();
+    restarted.deliver(&f.deployment).await?;
+
+    let next_message = f.input("UALICE", "3.0");
+    restarted
+        .accept(&f.deployment, next_message.clone(), None)
+        .await?;
+    restarted
+        .queue_stream(
+            &f.deployment,
+            &restarted
+                .store
+                .get::<Inbox>(&AdapterStore::inbox(&f.deployment.id, &next_message.id))
+                .await?
+                .unwrap(),
+            vec![SlackStreamChunk::MarkdownText { text: "4.".into() }],
+            true,
+        )
+        .await?;
+    restarted.deliver(&f.deployment).await?;
+    restarted.deliver(&f.deployment).await?;
+    let delivered = restarted
+        .store
+        .get::<Outbox>(&AdapterStore::outbox(
+            &f.deployment.id,
+            &format!("{}:stream", next_message.id),
+        ))
+        .await?
+        .unwrap();
+    assert!(delivered.sent);
+    assert!(delivered.failure.is_none());
+    f.service.root.shutdown().await
+}
+
+#[tokio::test]
 async fn receipts_continue_during_a_stalled_reply_and_shutdown_keeps_pending_work() -> Result<()> {
     use std::time::Duration;
     let f = Fixture::new().await?;
