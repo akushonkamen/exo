@@ -1056,6 +1056,77 @@ async fn email_binding_requires_trust_and_pins_take_precedence_without_revoking_
 }
 
 #[tokio::test]
+async fn configured_execution_vaults_are_available_and_revocable() -> Result<()> {
+    let mut f = Fixture::new().await?;
+    let root = f.service.root.exoharness_handle();
+    let shared = root.create_vault("sre").await?;
+    let hidden = root.create_vault("unselected").await?;
+    let agent = root.get_agent(&f.deployment.agent).await?.unwrap();
+    let original = exo_managed_agents::load_definition(agent.as_ref())
+        .await?
+        .unwrap();
+    let source = original
+        .source()
+        .replace("use_sender_vault: true", "vaults: [sre]");
+    agent
+        .write_artifact(exoharness::WriteArtifactRequest {
+            path: exo_managed_agents::AGENT_DEFINITION_PATH.into(),
+            contents: source.as_bytes().to_vec(),
+        })
+        .await?;
+    f.deployment.definition = AgentDefinition::parse(source)?
+        .frontmatter
+        .adapters
+        .remove(0);
+    let message = f.input("UUNKNOWN", "1.0");
+    f.service
+        .accept(&f.deployment, message.clone(), None)
+        .await?;
+    let mut inbox = f.inbox(&message).await?;
+    f.service.process_input(&f.deployment, &mut inbox).await?;
+    let authority = Authority {
+        deployment: f.deployment.id.clone(),
+        agent: f.deployment.agent,
+        thread: inbox.thread.unwrap(),
+        adapter: "slack".into(),
+        source: (&message).into(),
+        grant: None,
+    };
+    let runtime = f.service.caller_runtime(authority).await?;
+    let state = runtime.exoharness_handle();
+    let scoped_agent = state.get_agent(&f.deployment.agent).await?.unwrap();
+    let thread = scoped_agent
+        .get_thread(&inbox.thread.unwrap())
+        .await?
+        .unwrap();
+    assert!(
+        thread
+            .list_vaults()
+            .await?
+            .iter()
+            .any(|v| v.record().id == shared.record().id)
+    );
+    assert!(state.get_vault(&hidden.record().id).await?.is_none());
+    let bot = exo_managed_agents::vaults::find_vault(root.as_ref(), "support-slack").await?;
+    assert!(state.get_vault(&bot.record().id).await?.is_none());
+    agent
+        .write_artifact(exoharness::WriteArtifactRequest {
+            path: exo_managed_agents::AGENT_DEFINITION_PATH.into(),
+            contents: original.source().as_bytes().to_vec(),
+        })
+        .await?;
+    assert!(state.get_vault(&shared.record().id).await?.is_none());
+    assert!(
+        !thread
+            .list_vaults()
+            .await?
+            .iter()
+            .any(|v| v.record().id == shared.record().id)
+    );
+    f.service.root.shutdown().await
+}
+
+#[tokio::test]
 async fn sender_capabilities_share_history_without_accumulating_vaults() -> Result<()> {
     let f = Fixture::new().await?;
     let alice = f.private("alice", "alice@example.com").await?;

@@ -50,6 +50,8 @@ pub enum ChannelTrigger {
 pub struct SlackAdapter {
     pub name: Option<String>,
     pub vault: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub vaults: Vec<String>,
     #[serde(default)]
     pub transport: SlackTransport,
     #[serde(default)]
@@ -84,6 +86,13 @@ pub fn validate(adapters: &[AdapterDefinition]) -> Result<()> {
         ensure!(
             slack.vault != "global",
             "Slack transport credentials need a separate vault"
+        );
+        ensure!(
+            slack
+                .vaults
+                .iter()
+                .all(|vault| !vault.trim().is_empty() && vault != &slack.vault),
+            "execution vaults must be named and separate from Slack transport credentials"
         );
         ensure!(
             !slack.allow_slack_connect

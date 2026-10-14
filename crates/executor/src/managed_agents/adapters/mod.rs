@@ -735,6 +735,27 @@ impl AdapterService {
             .get_thread(&thread_id)
             .await?
             .context("adapter thread unavailable")?;
+        let AdapterDefinition::Slack(config) = &deployment.definition;
+        let selected = futures::future::try_join_all(config.vaults.iter().map(|reference| {
+            let state = runtime.exoharness_handle();
+            async move {
+                Ok::<_, anyhow::Error>(
+                    exo_managed_agents::vaults::find_vault(state.as_ref(), reference)
+                        .await?
+                        .record()
+                        .id,
+                )
+            }
+        }))
+        .await?;
+        let thread = if selected
+            .iter()
+            .any(|id| !thread.record().vaults.contains(id))
+        {
+            thread.attach_vaults(selected).await?
+        } else {
+            thread
+        };
         if let Some(turn) = &inbox.turn {
             let stream = runtime
                 .watch_turn(thread.as_ref(), turn.clone(), inbox.cursor)

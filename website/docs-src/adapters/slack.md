@@ -81,6 +81,7 @@ oauth_config:
       - channels:read
       - users:read
       - im:history
+      - im:read
       - reactions:write
 settings:
   socket_mode_enabled: true
@@ -101,7 +102,8 @@ settings:
 
 1. In your app's left sidebar, click **OAuth & Permissions**.
 2. At the top of the page, under **OAuth Tokens**, click **Install to Workspace**, then **Allow**.
-   If the app is already installed, you can go straight to the next step.
+   If the app is already installed and you changed its scopes, click **Reinstall to Workspace**.
+   Otherwise, continue to the next step.
 3. Back on **OAuth & Permissions**, find **Bot User OAuth Token** in the **OAuth Tokens** section.
    Click **Copy**. The value starts with `xoxb-`; use it for `SLACK_BOT_TOKEN` below.
 
@@ -182,7 +184,8 @@ URL verification. It starts accepting messages after you import them.
 
 In [Slack's app settings](https://api.slack.com/apps), choose **Create New App**,
 then **From a manifest**, and select your workspace. Replace both Request URLs
-below with your public webhook URL:
+below with your public webhook URL. If reusing a Socket Mode app, turn off
+**Socket Mode → Enable Socket Mode**; Slack sends events only over WebSockets while it is enabled.
 
 ```yaml
 display_information:
@@ -204,6 +207,7 @@ oauth_config:
       - channels:read
       - users:read
       - im:history
+      - im:read
       - reactions:write
 settings:
   socket_mode_enabled: false
@@ -224,7 +228,8 @@ settings:
 
 1. In your app's left sidebar, click **OAuth & Permissions**.
 2. At the top of the page, under **OAuth Tokens**, click **Install to Workspace**, then **Allow**.
-   If the app is already installed, you can go straight to the next step.
+   If the app is already installed and you changed its scopes, click **Reinstall to Workspace**.
+   Otherwise, continue to the next step.
 3. Back on **OAuth & Permissions**, find **Bot User OAuth Token** in the **OAuth Tokens** section.
    Click **Copy**. The value starts with `xoxb-`; use it for `SLACK_BOT_TOKEN` below.
 
@@ -268,9 +273,20 @@ adapters:
     use_sender_vault: true
 ```
 
-`use_sender_vault` defaults to `false`, using only `global`. With `true`, each turn
-uses `global` plus its submitter's associated vault, if available. It does not
-attach that vault permanently to the thread.
+To grant shared credentials to every turn from this adapter, select execution vaults:
+
+```yaml
+adapters:
+  - type: slack
+    transport: http
+    vault: support-slack
+    vaults: [sre]
+```
+
+`vault` holds only the Slack transport credentials. `vaults` grants the agent access
+to the selected execution vaults, alongside `global`. `use_sender_vault` defaults
+to `false`; with `true`, each turn also uses its submitter's associated vault, if
+available. It does not attach the sender's vault permanently to the thread.
 
 As the Exo administrator, associate a user's vault with their identity:
 
@@ -406,6 +422,7 @@ reinstall the app, and invite it to the channel.
 | Field | Default | Meaning |
 | --- | --- | --- |
 | `vault` | Required | Vault containing `bot-token`, plus `app-token` for Socket Mode or `signing-secret` for HTTP. |
+| `vaults` | `[]` | Named vaults available to agent turns. The transport `vault` is excluded; hosted providers require shared vaults in the agent’s project. |
 | `use_sender_vault` | `false` | Also use the submitter's associated vault for that turn, if available. `global` remains available. History and files stay shared within the conversation. |
 | `transport` | `socket` | `socket` or `http`. Braintrust and Cloudflare require explicit `http`. |
 | `name` | `slack` | Distinguishes multiple Slack adapters on one agent. |
@@ -457,6 +474,8 @@ the agent as well: `/exo/agent/support-analyst/adapter/slack`.
 - No channel response: invite the bot, mention it, and check `allowed_channels`.
 - No follow-up response: check the channel event subscription and history scope; reinstall after changing scopes.
 - Can't send a DM: enable the app's Messages tab and allow users to send messages to it.
+- DM gets no response: subscribe to the `message.im` bot event and grant `im:history` and `im:read`; reinstall after changing scopes. For HTTP, also check that Socket Mode is disabled.
+- `missing_scope`: add the scope named in the server log, reinstall the app, and update the vault's `bot-token` if Slack issued a different token.
 - Token rejected: check that the credentials belong to the same app and that the app is installed.
 - User is rejected: check `allowed_users`, channel/DM restrictions, and Slack Connect settings. A private vault isn't required for shared-only access.
 - Private integration is unavailable: enable `use_sender_vault`, then check the trusted identity source, vault ownership, Exo permissions, and credential in the user's vault. If an explicit workspace/user-ID pin exists, check it too.

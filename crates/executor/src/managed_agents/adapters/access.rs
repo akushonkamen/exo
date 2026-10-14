@@ -134,7 +134,27 @@ impl AccessPolicy for AdapterPolicy {
             record.name = "personal".into();
             return Ok(Some(record));
         }
-        Ok(None)
+        let agent = self
+            .root
+            .get_agent(&self.authority.agent)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("adapter agent was removed"))?;
+        let definition = self
+            .definitions
+            .load(agent.as_ref())
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("adapter agent definition is missing"))?;
+        let allowed = definition.frontmatter.adapters.iter().any(|adapter| {
+            let exo_managed_agents::adapters::AdapterDefinition::Slack(config) = adapter;
+            adapter.name() == self.authority.adapter
+                && config.vault != record.name
+                && config.vault != record.id.to_string()
+                && config
+                    .vaults
+                    .iter()
+                    .any(|vault| vault == &record.name || vault == &record.id.to_string())
+        });
+        Ok(allowed.then(|| record.clone()))
     }
     async fn vault_created(&self, _: &str, _: VaultId, _: &str) -> Result<()> {
         anyhow::bail!("adapter callers cannot create vaults")
