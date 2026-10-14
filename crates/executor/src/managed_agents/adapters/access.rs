@@ -150,7 +150,7 @@ impl AccessPolicy for AdapterPolicy {
                 && config.vault != record.name
                 && config.vault != record.id.to_string()
                 && config
-                    .vaults
+                    .turn_vaults
                     .iter()
                     .any(|vault| vault == &record.name || vault == &record.id.to_string())
         });

@@ -736,7 +736,7 @@ impl AdapterService {
             .await?
             .context("adapter thread unavailable")?;
         let AdapterDefinition::Slack(config) = &deployment.definition;
-        let selected = futures::future::try_join_all(config.vaults.iter().map(|reference| {
+        let selected = futures::future::try_join_all(config.turn_vaults.iter().map(|reference| {
             let state = runtime.exoharness_handle();
             async move {
                 Ok::<_, anyhow::Error>(

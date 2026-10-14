@@ -199,18 +199,20 @@ Queued inputs are reauthorized before execution.
 
 ### Vault selection per turn
 
-The adapter's `vault` selects bot connection credentials. `use_sender_vault`
-controls the credentials available while answering a message:
+The adapter's `vault` selects bot connection credentials. `turn_vaults` selects
+shared vaults available while answering a message. `use_sender_vault` adds the
+sender's private credentials:
 
 ```yaml
 adapters:
   - type: slack
     vault: support-slack
+    turn_vaults: [sre]
     use_sender_vault: true
 ```
 
-The default, `false`, uses only `global` and does not look up a private user
-identity. With `true`, a resolved sender also uses their default private vault
+The default, `false`, uses `global` and the configured `turn_vaults`, without
+looking up a private user identity. With `true`, a resolved sender also uses their default private vault
 (`personal`) for that turn, taking precedence over `global`. A sender without an
 associated vault still uses `global`. Never attach one sender's private vault to
 the persistent thread or accumulate participants' vaults.

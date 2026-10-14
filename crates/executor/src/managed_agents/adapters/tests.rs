@@ -1067,7 +1067,7 @@ async fn configured_execution_vaults_are_available_and_revocable() -> Result<()>
         .unwrap();
     let source = original
         .source()
-        .replace("use_sender_vault: true", "vaults: [sre]");
+        .replace("use_sender_vault: true", "turn_vaults: [sre]");
     agent
         .write_artifact(exoharness::WriteArtifactRequest {
             path: exo_managed_agents::AGENT_DEFINITION_PATH.into(),
