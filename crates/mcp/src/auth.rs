@@ -64,12 +64,12 @@ impl CredentialClient {
     {
         let (result, supplied) =
             crate::send_authenticated(self.credentials.as_ref(), &self.server, call, |result| {
-                matches!(result, Err(HttpError::AuthRequired(_)))
+                result.as_ref().is_err_and(authentication_rejected)
             })
             .await
             .map_err(credential_error)?;
         result.map_err(|error| {
-            if error.auth_challenge().is_some() {
+            if authentication_rejected(&error) || error.auth_challenge().is_some() {
                 TransportError::Client(ClientError {
                     error: anyhow::Error::new(error),
                     authentication: Some(McpAuthenticationError {
@@ -84,6 +84,17 @@ impl CredentialClient {
                 map_transport_error(error)
             }
         })
+    }
+}
+
+fn authentication_rejected(error: &HttpError) -> bool {
+    match error {
+        HttpError::AuthRequired(_) => true,
+        HttpError::Client(error) => error.status() == Some(reqwest::StatusCode::UNAUTHORIZED),
+        HttpError::UnexpectedServerResponse(response) => {
+            response.starts_with("HTTP 401 Unauthorized:")
+        }
+        _ => false,
     }
 }
 
