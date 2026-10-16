@@ -425,7 +425,10 @@ impl AdapterService {
         } else {
             self.root.exoharness_handle()
         };
-        let vault = exo_managed_agents::vaults::find_vault(owner.as_ref(), &config.vault).await?;
+        let vault_name = config.vault.as_deref().ok_or_else(|| {
+            anyhow::anyhow!("Slack adapter uses a registered bot, which its host delivers")
+        })?;
+        let vault = exo_managed_agents::vaults::find_vault(owner.as_ref(), vault_name).await?;
         let global =
             exoharness::vault::global_vault(self.root.exoharness_handle().as_ref()).await?;
         ensure!(
@@ -1469,7 +1472,10 @@ impl AdapterService {
         } else {
             self.root.exoharness_handle()
         };
-        let vault = exo_managed_agents::vaults::find_vault(owner.as_ref(), &config.vault).await?;
+        let vault_name = config.vault.as_deref().ok_or_else(|| {
+            anyhow::anyhow!("Slack adapter uses a registered bot, which its host delivers")
+        })?;
+        let vault = exo_managed_agents::vaults::find_vault(owner.as_ref(), vault_name).await?;
         let metadata = vault.list_secrets().await?;
         let signing = match metadata
             .into_iter()
