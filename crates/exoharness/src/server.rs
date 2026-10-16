@@ -296,6 +296,12 @@ impl ExoHarnessServer {
                     artifacts: agent.list_artifacts().await?,
                 })
             }
+            Request::AgentDiagnose { agent_id } => {
+                let agent = self.require_agent(&agent_id).await?;
+                Ok(Response::Diagnostics {
+                    checks: agent.diagnose().await?,
+                })
+            }
             Request::AgentReadArtifact { agent_id, request } => {
                 let agent = self.require_agent(&agent_id).await?;
                 Ok(Response::Artifact {

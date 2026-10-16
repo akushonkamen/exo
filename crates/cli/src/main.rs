@@ -633,6 +633,10 @@ enum AgentCommands {
     Delete {
         agent: String,
     },
+    /// Check an agent's definition, adapters, and provider setup, and suggest fixes.
+    Doctor {
+        agent: String,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -1092,6 +1096,7 @@ async fn run_selected(
             } | Commands::Agent {
                 command: AgentCommands::List
                     | AgentCommands::Get { .. }
+                    | AgentCommands::Doctor { .. }
                     | AgentCommands::Mount {
                         command: AgentMountCommands::List { .. }
                     },
@@ -1112,7 +1117,7 @@ async fn run_selected(
             eprintln!(
                 "provider: {}; account: {}",
                 name.escape_debug(),
-                account.escape_debug()
+                providers::format_account(&account)
             );
             if !selection.context.is_empty() {
                 eprintln!("context: {}", serde_json::to_string(&selection.context)?);
@@ -1404,6 +1409,32 @@ async fn run_selected(
                     "braintrust: {}",
                     format_braintrust_tracing_config(config.braintrust.as_ref())
                 );
+            }
+            AgentCommands::Doctor { agent } => {
+                let agent = must_get_agent(harness.as_ref(), &agent).await?;
+                let mut checks = diagnose_agent(harness.as_ref(), agent.as_ref()).await;
+                checks.extend(agent.diagnose().await?);
+                let mut failed = false;
+                for check in &checks {
+                    let mark = match check.status {
+                        exoharness::DiagnosticStatus::Ok => "ok",
+                        exoharness::DiagnosticStatus::Warning => "warning",
+                        exoharness::DiagnosticStatus::Error => {
+                            failed = true;
+                            "error"
+                        }
+                    };
+                    println!("{mark}: {}: {}", check.name, check.message);
+                    if let Some(fix) = &check.fix {
+                        println!("  fix: {fix}");
+                    }
+                }
+                if checks.is_empty() {
+                    println!("ok: nothing to check for agent {}", agent.record().slug);
+                }
+                if failed {
+                    std::process::exit(1);
+                }
             }
             AgentCommands::Delete { agent } => {
                 let record = must_get_agent(harness.as_ref(), &agent).await?.record().clone();
@@ -1986,7 +2017,9 @@ fn command_refs_mut(command: &mut Commands) -> (Option<&mut String>, Option<&mut
             )
         }
         Commands::Agent { command, .. } => match command {
-            AgentCommands::Get { agent } | AgentCommands::Delete { agent } => (Some(agent), None),
+            AgentCommands::Get { agent }
+            | AgentCommands::Delete { agent }
+            | AgentCommands::Doctor { agent } => (Some(agent), None),
             AgentCommands::Mount { command } => match command {
                 AgentMountCommands::List { agent }
                 | AgentMountCommands::Create { agent, .. }
@@ -2265,6 +2298,115 @@ fn print_mounts(mounts: &[FileSystemMount]) {
             if internal { ", internal" } else { "" }
         );
     }
+}
+
+/// Checks that hold on every provider: the saved definition loads, and each
+/// adapter's transport vault holds the secrets its transport needs.
+async fn diagnose_agent(
+    harness: &Runtime,
+    agent: &dyn AgentHandle,
+) -> Vec<exoharness::DiagnosticCheck> {
+    use exo_managed_agents::adapters::{AdapterDefinition, SlackTransport};
+    use exoharness::{DiagnosticCheck, DiagnosticStatus};
+    let check = |name: String, status, message: String, fix: Option<String>| DiagnosticCheck {
+        name,
+        status,
+        message,
+        fix,
+    };
+    let definition = match exo_managed_agents::load_definition(agent).await {
+        Ok(Some(definition)) => definition,
+        Ok(None) => {
+            return vec![check(
+                "definition".into(),
+                DiagnosticStatus::Error,
+                "No definition is saved".into(),
+                Some("exo agent update <file>".into()),
+            )];
+        }
+        Err(error) => {
+            return vec![check(
+                "definition".into(),
+                DiagnosticStatus::Error,
+                format!("{error:#}"),
+                Some("Fix the definition file, then run exo agent update <file>".into()),
+            )];
+        }
+    };
+    let mut checks = vec![check(
+        "definition".into(),
+        DiagnosticStatus::Ok,
+        "The saved definition loads".into(),
+        None,
+    )];
+    for adapter in &definition.frontmatter.adapters {
+        let AdapterDefinition::Slack(slack) = adapter;
+        let name = format!("slack adapter {}", adapter.name());
+        let vault = match exo_managed_agents::vaults::find_vault(
+            harness.exoharness_handle().as_ref(),
+            &slack.vault,
+        )
+        .await
+        {
+            Ok(vault) => vault,
+            Err(error) => {
+                checks.push(check(
+                    name,
+                    DiagnosticStatus::Error,
+                    format!("{error:#}"),
+                    Some(format!("exo vault create {}", slack.vault)),
+                ));
+                continue;
+            }
+        };
+        let secrets = match vault.list_secrets().await {
+            Ok(secrets) => secrets,
+            Err(error) => {
+                checks.push(check(
+                    name,
+                    DiagnosticStatus::Error,
+                    format!("{error:#}"),
+                    None,
+                ));
+                continue;
+            }
+        };
+        let required = match slack.transport {
+            SlackTransport::Socket => [
+                ("bot-token", "SLACK_BOT_TOKEN"),
+                ("app-token", "SLACK_APP_TOKEN"),
+            ],
+            SlackTransport::Http => [
+                ("bot-token", "SLACK_BOT_TOKEN"),
+                ("signing-secret", "SLACK_SIGNING_SECRET"),
+            ],
+        };
+        let missing: Vec<_> = required
+            .iter()
+            .filter(|(secret, _)| !secrets.iter().any(|stored| stored.name == *secret))
+            .collect();
+        if missing.is_empty() {
+            checks.push(check(
+                name,
+                DiagnosticStatus::Ok,
+                format!("Vault {} has the Slack credentials", slack.vault),
+                None,
+            ));
+            continue;
+        }
+        for (secret, env) in missing {
+            checks.push(check(
+                name.clone(),
+                DiagnosticStatus::Warning,
+                format!("Vault {} has no {secret} yet", slack.vault),
+                Some(format!(
+                    "exo vault secret create {} {secret} --token-env {env}",
+                    slack.vault
+                )),
+            ));
+        }
+    }
+    checks
 }
 
 async fn must_get_agent(harness: &Runtime, agent_ref: &str) -> Result<Arc<dyn AgentHandle>> {

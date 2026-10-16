@@ -201,6 +201,29 @@ pub trait AgentHandle: SandboxHandle + VaultContext {
     async fn write_artifact(&self, request: WriteArtifactRequest) -> Result<ArtifactVersion>;
     async fn read_artifact(&self, request: ReadArtifactRequest) -> Result<Option<Artifact>>;
     async fn list_artifacts(&self) -> Result<Vec<ArtifactVersion>>;
+
+    /// Provider-specific checks for `exo agent doctor`, beyond the definition
+    /// and vault checks every provider gets.
+    async fn diagnose(&self) -> Result<Vec<DiagnosticCheck>> {
+        Ok(Vec::new())
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DiagnosticStatus {
+    Ok,
+    Warning,
+    Error,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DiagnosticCheck {
+    pub name: String,
+    pub status: DiagnosticStatus,
+    pub message: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fix: Option<String>,
 }
 
 #[async_trait]

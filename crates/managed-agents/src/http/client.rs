@@ -139,6 +139,31 @@ impl RuntimeClient {
             .await
     }
 
+    pub async fn diagnose_agent(&self, id: AgentId) -> Result<Vec<exoharness::DiagnosticCheck>> {
+        #[derive(serde::Deserialize)]
+        struct Report {
+            checks: Vec<exoharness::DiagnosticCheck>,
+        }
+        match self
+            .http
+            .json::<Report>(
+                self.http
+                    .request(Method::GET, &format!("agent/{id}/doctor"))?,
+            )
+            .await
+        {
+            Ok(report) => Ok(report.checks),
+            Err(error)
+                if error
+                    .downcast_ref::<exoharness::HttpResponseError>()
+                    .is_some_and(|error| error.status == reqwest::StatusCode::NOT_FOUND) =>
+            {
+                Ok(Vec::new())
+            }
+            Err(error) => Err(error),
+        }
+    }
+
     pub async fn list_agent_artifacts(
         &self,
         id: AgentId,

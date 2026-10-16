@@ -26,8 +26,8 @@ use crate::{
     AddEventsRequest, AddEventsResult, AgentHandle, AgentId, AgentRecord, Artifact,
     ArtifactVersion, AttachSandboxRequest, BeginTurnRequest, Binding, BindingId, BindingRecord,
     CancelSandboxProcessRequest, CloseSandboxProcessInputRequest, ConversationHandle,
-    ConversationId, ConversationRecord, CreateSandboxRequest, Event, EventData, EventId,
-    EventQuery, EventStream, ExoHarness, ForkConversationRequest, ForkSandboxRequest,
+    ConversationId, ConversationRecord, CreateSandboxRequest, DiagnosticCheck, Event, EventData,
+    EventId, EventQuery, EventStream, ExoHarness, ForkConversationRequest, ForkSandboxRequest,
     GetEventsResult, GetSandboxProcessEventsResult, ListConversationsRequest,
     ListConversationsResult, NewAgentRequest, NewConversationRequest, PutSecretRequest,
     ReadArtifactRequest, RestoreSandboxRequest, Result, RunInSandboxRequest, SandboxAttachment,
@@ -666,6 +666,18 @@ impl AgentHandle for HttpAgentHandle {
         {
             Response::ArtifactVersions { artifacts } => Ok(artifacts),
             response => unexpected_response(response, "artifact_versions"),
+        }
+    }
+    async fn diagnose(&self) -> Result<Vec<DiagnosticCheck>> {
+        match self
+            .harness
+            .request(Request::AgentDiagnose {
+                agent_id: self.record.id,
+            })
+            .await?
+        {
+            Response::Diagnostics { checks } => Ok(checks),
+            response => unexpected_response(response, "diagnostics"),
         }
     }
 }

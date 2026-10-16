@@ -340,6 +340,9 @@ impl ExoHttpTransport for RuntimeTransport {
             Request::AgentListArtifacts { agent_id } => Ok(Response::ArtifactVersions {
                 artifacts: self.client.list_agent_artifacts(agent_id).await?,
             }),
+            Request::AgentDiagnose { agent_id } => Ok(Response::Diagnostics {
+                checks: self.client.diagnose_agent(agent_id).await?,
+            }),
             Request::AgentReadArtifact { agent_id, request } => Ok(Response::Artifact {
                 artifact: self.client.read_agent_artifact(agent_id, &request).await?,
             }),

@@ -151,6 +151,7 @@ pub(crate) fn validate_http_command(command: &crate::Commands) -> Result<()> {
                 | AgentCommands::Create { .. }
                 | AgentCommands::Update { .. }
                 | AgentCommands::Get { .. }
+                | AgentCommands::Doctor { .. }
                 | AgentCommands::Delete { .. },
             ..
         }
@@ -700,6 +701,20 @@ fn absolute_root(path: &Path) -> Result<PathBuf> {
     Ok(path.canonicalize()?)
 }
 
+pub(crate) fn format_account(account: &str) -> String {
+    #[derive(Deserialize)]
+    struct Account {
+        kind: String,
+        id: String,
+    }
+
+    let display = match serde_json::from_str::<Account>(account) {
+        Ok(account) => format!("{} ({})", account.id, account.kind),
+        Err(_) => account.to_owned(),
+    };
+    display.escape_debug().to_string()
+}
+
 fn print_selection(store: &Store) -> Result<()> {
     let Some(selection) = store.selected(None, None, None)? else {
         println!("provider: local (built-in; no saved selection)");
@@ -762,7 +777,11 @@ pub async fn run(command: Option<&ProviderCommands>, store: &mut Store) -> Resul
                                 Connection::Local { root } => root.display().to_string(),
                                 Connection::Http { endpoint, .. } => endpoint.clone(),
                             },
-                            profile.account_id.clone().unwrap_or_default(),
+                            profile
+                                .account_id
+                                .as_deref()
+                                .map(format_account)
+                                .unwrap_or_default(),
                         ]
                     })
                     .collect(),
@@ -987,7 +1006,7 @@ pub async fn run(command: Option<&ProviderCommands>, store: &mut Store) -> Resul
                 }
                 return Err(error);
             }
-            println!("provider: {name}; account: {account}");
+            println!("provider: {name}; account: {}", format_account(&account));
         }
         ProviderCommands::Logout { name } => {
             let prior = store.profile(name)?.clone();
