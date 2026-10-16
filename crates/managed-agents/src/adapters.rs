@@ -24,7 +24,7 @@ impl AdapterDefinition {
     }
     pub fn vault(&self) -> Option<&str> {
         match self {
-            Self::Slack(c) => c.vault.as_deref(),
+            Self::Slack(c) => Some(&c.vault),
         }
     }
 }
@@ -49,10 +49,7 @@ pub enum ChannelTrigger {
 #[serde(deny_unknown_fields)]
 pub struct SlackAdapter {
     pub name: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub vault: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub bot: Option<String>,
+    pub vault: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub turn_vaults: Vec<String>,
     #[serde(default)]
@@ -81,35 +78,20 @@ pub fn validate(adapters: &[AdapterDefinition]) -> Result<()> {
             "adapter names may only contain letters, numbers, '-' and '_'"
         );
         ensure!(names.insert(name), "duplicate adapter: {name}");
+        ensure!(
+            adapter.vault().is_none_or(|vault| !vault.trim().is_empty()),
+            "adapter {name} needs a vault name"
+        );
         let AdapterDefinition::Slack(slack) = adapter;
-        match (&slack.vault, &slack.bot) {
-            (Some(vault), None) => {
-                ensure!(
-                    !vault.trim().is_empty(),
-                    "adapter {name} needs a vault name"
-                );
-                ensure!(
-                    vault != "global",
-                    "Slack transport credentials need a separate vault"
-                );
-            }
-            (None, Some(bot)) => {
-                ensure!(!bot.trim().is_empty(), "adapter {name} needs a bot id");
-                ensure!(
-                    slack.transport == SlackTransport::Http,
-                    "adapter {name} uses a registered bot, which requires transport: http"
-                );
-            }
-            (Some(_), Some(_)) => {
-                anyhow::bail!("adapter {name} must set either vault or bot, not both")
-            }
-            (None, None) => anyhow::bail!("adapter {name} needs a vault or a bot"),
-        }
+        ensure!(
+            slack.vault != "global",
+            "Slack transport credentials need a separate vault"
+        );
         ensure!(
             slack
                 .turn_vaults
                 .iter()
-                .all(|vault| !vault.trim().is_empty() && Some(vault) != slack.vault.as_ref()),
+                .all(|vault| !vault.trim().is_empty() && vault != &slack.vault),
             "execution vaults must be named and separate from Slack transport credentials"
         );
         ensure!(
@@ -144,29 +126,6 @@ mod tests {
             )
             .is_err()
         );
-        Ok(())
-    }
-
-    #[test]
-    fn adapters_use_exactly_one_credential_source() -> Result<()> {
-        let parse = |source: &str| -> Result<()> {
-            validate(&serde_yaml_ng::from_str::<Vec<AdapterDefinition>>(source)?)
-        };
-        parse("- type: slack\n  vault: bot\n")?;
-        parse("- type: slack\n  bot: 0f9d7f0e\n  transport: http\n")?;
-        for (source, error) in [
-            ("- type: slack\n", "needs a vault or a bot"),
-            (
-                "- type: slack\n  vault: bot\n  bot: 0f9d7f0e\n  transport: http\n",
-                "either vault or bot",
-            ),
-            (
-                "- type: slack\n  bot: 0f9d7f0e\n",
-                "requires transport: http",
-            ),
-        ] {
-            assert!(parse(source).unwrap_err().to_string().contains(error));
-        }
         Ok(())
     }
 }

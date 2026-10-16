@@ -85,8 +85,8 @@ impl AccessPolicy for AdapterPolicy {
             let sender_vault =
                 exoharness::vault::require_vault(self.root.as_ref(), &grant.vault).await?;
             if !config.use_sender_vault
-                || config.vault.as_deref() == Some(grant.vault.to_string().as_str())
-                || config.vault.as_deref() == Some(sender_vault.record().name.as_str())
+                || config.vault == grant.vault.to_string()
+                || config.vault == sender_vault.record().name
             {
                 return Err(AdapterAccessDenied.into());
             }
@@ -147,8 +147,8 @@ impl AccessPolicy for AdapterPolicy {
         let allowed = definition.frontmatter.adapters.iter().any(|adapter| {
             let exo_managed_agents::adapters::AdapterDefinition::Slack(config) = adapter;
             adapter.name() == self.authority.adapter
-                && config.vault.as_deref() != Some(record.name.as_str())
-                && config.vault.as_deref() != Some(record.id.to_string().as_str())
+                && config.vault != record.name
+                && config.vault != record.id.to_string()
                 && config
                     .turn_vaults
                     .iter()
