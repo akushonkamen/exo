@@ -2,6 +2,7 @@ use super::*;
 
 fn fixture(config: &FirecrackerConfig) -> Result<SnapshotPayload> {
     let manifest = FilesystemManifest {
+        partial: false,
         template: false,
         key: "a".repeat(64),
         sandbox_id: "filesystem-test".into(),
@@ -530,5 +531,36 @@ fn filesystem_and_memory_captures_share_a_budget_without_charging_external_base_
     );
     fs::remove_file(cache)?;
     assert_eq!(retained_snapshot_bytes(&config)?, pool_bytes + memory_bytes);
+    Ok(())
+}
+
+#[test]
+fn partial_captures_require_matching_external_disks() -> Result<()> {
+    let root = tempfile::tempdir()?;
+    let config = FirecrackerConfig {
+        state_root: root.path().into(),
+        ..Default::default()
+    };
+    let payload = fixture(&config)?;
+    let mut manifest = FilesystemManifest::from_payload(&payload)?;
+    assert!(open_capture(&config, payload)?.complete);
+    validate_attached_disks(&manifest, None)?;
+    manifest.partial = true;
+    fs::write(
+        manifest.directory(&config).join("manifest.json"),
+        serde_json::to_vec(&manifest)?,
+    )?;
+    let partial = manifest.payload()?;
+    assert_eq!(partial.format, SnapshotFormat::FirecrackerLazyFilesystemRef);
+    assert_ne!(partial.format, SnapshotFormat::FirecrackerFilesystemRef);
+    assert!(!open_capture(&config, partial)?.complete);
+    assert!(validate_attached_disks(&manifest, None).is_err());
+    let mut attached = AttachedDisks {
+        key: manifest.key.clone(),
+        disks: Vec::new(),
+    };
+    validate_attached_disks(&manifest, Some(&attached))?;
+    attached.key = "c".repeat(64);
+    assert!(validate_attached_disks(&manifest, Some(&attached)).is_err());
     Ok(())
 }

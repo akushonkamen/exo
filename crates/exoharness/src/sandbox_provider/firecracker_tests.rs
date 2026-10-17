@@ -871,6 +871,7 @@ fn test_shared(
         capacity_gate: Mutex::new(()),
         starting_machines: Arc::new(StdMutex::new(HashSet::new())),
         base_image_digests: StdMutex::new(HashMap::new()),
+        filesystem_disks: StdMutex::new(HashMap::new()),
     }))
 }
 
