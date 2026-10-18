@@ -217,6 +217,20 @@ impl RuntimeClient {
             .await
     }
 
+    pub async fn write_agent_definition(
+        &self,
+        id: AgentId,
+        definition: &crate::AgentDefinition,
+    ) -> Result<exoharness::ArtifactVersion> {
+        self.http
+            .json(
+                self.http
+                    .request(Method::PUT, &format!("agent/{id}/definition"))?
+                    .json(definition),
+            )
+            .await
+    }
+
     pub async fn create_vault(&self, name: &str) -> Result<exoharness::vault::VaultRecord> {
         self.http
             .json(

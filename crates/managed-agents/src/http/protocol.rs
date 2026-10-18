@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 pub struct CreateManagedAgentBody {
     pub name: String,
     pub slug: String,
-    pub definition: String,
+    pub definition: crate::AgentDefinition,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

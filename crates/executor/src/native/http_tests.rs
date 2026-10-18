@@ -645,8 +645,8 @@ async fn managed_agents_created_locally_resume_over_http() -> Result<()> {
             exo_managed_agents::load_definition(agent.as_ref())
                 .await?
                 .context("definition")?
-                .source(),
-            definition.source()
+                .to_json()?,
+            definition.to_json()?
         );
         let opened = runtime
             .open_managed_thread(
@@ -708,8 +708,8 @@ async fn managed_agents_created_locally_resume_over_http() -> Result<()> {
         exo_managed_agents::load_definition(uploaded.as_ref())
             .await?
             .context("uploaded definition")?
-            .source(),
-        definition.source()
+            .to_json()?,
+        definition.to_json()?
     );
     assert!(
         remote
@@ -984,7 +984,7 @@ async fn saved_policy_changes_apply_to_existing_local_and_http_threads() -> Resu
             let policy = if ask { "always_ask" } else { "always_allow" };
             local_agent.write_artifact(exoharness::WriteArtifactRequest {
                 path: exo_managed_agents::AGENT_DEFINITION_PATH.into(),
-                contents: format!("---\nharness: basic\npermission_policy: {{type: {policy}}}\nmodel:\n  name: test-model\n---\nUse tools.").into_bytes(),
+                contents: exo_managed_agents::AgentDefinition::parse(format!("---\nharness: basic\npermission_policy: {{type: {policy}}}\nmodel:\n  name: test-model\n---\nUse tools."))?.to_json()?,
             }).await?;
             f.release.add_permits(1);
             let (turn, mut stream) = runtime
@@ -1191,10 +1191,6 @@ async fn rejected_agent_update_restores_the_saved_definition() -> Result<()> {
     let f = Fixture::new().await?;
     let source =
         "---\nharness: basic\nmodel:\n  name: test-model\n---\n\nKeep the saved instructions.";
-    let request = |source: &str| exoharness::WriteArtifactRequest {
-        path: exo_managed_agents::AGENT_DEFINITION_PATH.into(),
-        contents: source.as_bytes().to_vec(),
-    };
     let agent = f
         .runtime
         .get_agent(&f.agent_id.to_string())
@@ -1203,7 +1199,10 @@ async fn rejected_agent_update_restores_the_saved_definition() -> Result<()> {
     let invalid = source.replace("harness: basic", "harness: nonexistent-harness");
     assert!(
         f.client
-            .write_agent_artifact(f.agent_id, &request(&invalid))
+            .write_agent_definition(
+                f.agent_id,
+                &exo_managed_agents::AgentDefinition::parse(invalid)?
+            )
             .await
             .is_err()
     );
@@ -1217,7 +1216,10 @@ async fn rejected_agent_update_restores_the_saved_definition() -> Result<()> {
         "test-model"
     );
     f.client
-        .write_agent_artifact(f.agent_id, &request(source))
+        .write_agent_definition(
+            f.agent_id,
+            &exo_managed_agents::AgentDefinition::parse(source.into())?,
+        )
         .await?;
     assert_eq!(
         f.runtime.get_agent_config(agent.as_ref()).await?.model,
@@ -1226,7 +1228,10 @@ async fn rejected_agent_update_restores_the_saved_definition() -> Result<()> {
     let invalid = source.replace("harness: basic", "harness: nonexistent-harness");
     let error = f
         .client
-        .write_agent_artifact(f.agent_id, &request(&invalid))
+        .write_agent_definition(
+            f.agent_id,
+            &exo_managed_agents::AgentDefinition::parse(invalid)?,
+        )
         .await
         .unwrap_err();
     assert!(format!("{error:#}").contains("unknown harness: nonexistent-harness"));
@@ -1234,8 +1239,8 @@ async fn rejected_agent_update_restores_the_saved_definition() -> Result<()> {
         exo_managed_agents::load_definition(agent.as_ref())
             .await?
             .context("restored definition")?
-            .source(),
-        source,
+            .to_json()?,
+        exo_managed_agents::AgentDefinition::parse(source.into())?.to_json()?,
     );
     assert_eq!(
         crate::load_agent_config(agent.as_ref()).await?.model,
@@ -1284,7 +1289,7 @@ async fn http_managed_agent_creation_uses_one_definition_aware_request() -> Resu
             "rejection must not register a shell or attempt DELETE"
         );
         let body: CreateManagedAgentBody = requests[0].body_json()?;
-        assert_eq!(body.definition, source);
+        assert_eq!(body.definition.instructions, definition.instructions);
         assert_eq!(
             (body.name.as_str(), body.slug.as_str()),
             ("Support", "support")
@@ -1324,8 +1329,11 @@ async fn managed_agent_creation_validates_before_reserving_the_slug() -> Result<
     let mut body = CreateManagedAgentBody {
         name: "Support".into(),
         slug: "support".into(),
-        definition: "invalid frontmatter".into(),
+        definition: exo_managed_agents::AgentDefinition::parse(
+            "---\nharness: basic\nmodel: {name: test-model}\n---\nSaved instructions.".into(),
+        )?,
     };
+    body.definition.instructions.clear();
     assert!(f.client.create_managed_agent(&body).await.is_err());
     assert!(
         !f.runtime
@@ -1335,8 +1343,7 @@ async fn managed_agent_creation_validates_before_reserving_the_slug() -> Result<
             .iter()
             .any(|agent| agent.record().slug == "support")
     );
-    body.definition =
-        "---\nharness: basic\nmodel: {name: test-model}\n---\nSaved instructions.".into();
+    body.definition.instructions = "Saved instructions.".into();
     let agent = f.client.create_managed_agent(&body).await?;
     assert_eq!(
         (agent.name.as_str(), agent.slug.as_str()),
@@ -1352,8 +1359,8 @@ async fn managed_agent_creation_validates_before_reserving_the_slug() -> Result<
         exo_managed_agents::load_definition(saved.as_ref())
             .await?
             .context("saved definition")?
-            .source(),
-        body.definition
+            .to_json()?,
+        body.definition.to_json()?
     );
     f.stop().await
 }

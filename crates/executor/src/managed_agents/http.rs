@@ -206,6 +206,7 @@ async fn route(
         routes!(method, tail;
         ("GET", []) => reply!(get_agent, &agent),
         ("DELETE", []) => reply!(delete_agent, &agent),
+        ("PUT", ["definition"]) => reply!(write_agent_definition, &agent, body(r)?),
         ("GET", ["artifact"]) => reply!(list_artifacts, &agent),
         ("GET", ["artifact", "read"]) => reply!(read_artifact, &agent, query(r)?),
         ("POST", ["artifact"]) => reply!(write_artifact, &agent, body(r)?),
