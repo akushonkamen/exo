@@ -8,6 +8,13 @@ use lingua::{Message, universal::UserContent};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CreateManagedAgentBody {
+    pub name: String,
+    pub slug: String,
+    pub definition: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum OneOrMany<T> {
     One(T),

@@ -154,6 +154,7 @@ async fn route(
     ("DELETE", ["environment", name]) => reply!(delete_environment, name),
     ("GET", ["agent"]) => reply!(list_agents, query(r)?),
     ("POST", ["agent"]) => reply!(create_agent, body(r)?),
+    ("POST", ["agent", "managed"]) => reply!(create_managed_agent, body(r)?),
     );
     let mut vault = api::VaultPath {
         agent_id: None,

@@ -162,9 +162,27 @@ impl HttpProvider {
     }
 }
 
+#[async_trait]
 impl AgentBackend for HttpProvider {
     fn exoharness(&self) -> Arc<dyn ExoHarness> {
         Arc::new(self.state.clone())
+    }
+    async fn create_managed_agent(
+        &self,
+        definition: &exo_managed_agents::AgentDefinition,
+        name: &str,
+        slug: &str,
+    ) -> Result<Arc<dyn exoharness::AgentHandle>> {
+        let record = self
+            .transport
+            .client
+            .create_managed_agent(&CreateManagedAgentBody {
+                name: name.to_owned(),
+                slug: slug.to_owned(),
+                definition: definition.source().to_owned(),
+            })
+            .await?;
+        Ok(self.state.agent_from_record(record))
     }
 }
 

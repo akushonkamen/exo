@@ -133,6 +133,41 @@ impl AgentDefinition {
 pub trait AgentBackend: Send + Sync {
     fn exoharness(&self) -> Arc<dyn ExoHarness>;
 
+    async fn create_managed_agent(
+        &self,
+        definition: &AgentDefinition,
+        name: &str,
+        slug: &str,
+    ) -> Result<Arc<dyn AgentHandle>> {
+        let agent = self
+            .exoharness()
+            .new_agent(NewAgentRequest {
+                vaults: vec![],
+                slug: slug.to_string(),
+                name: name.to_string(),
+            })
+            .await?;
+        let saved: Result<()> = async {
+            self.configure_agent(&agent, definition).await?;
+            agent
+                .write_artifact(WriteArtifactRequest {
+                    path: AGENT_DEFINITION_PATH.to_string(),
+                    contents: definition.source.as_bytes().to_vec(),
+                })
+                .await?;
+            Ok(())
+        }
+        .await;
+        if let Err(error) = &saved {
+            self.exoharness()
+                .delete_agent(&agent.record().id)
+                .await
+                .with_context(|| format!("saving agent failed ({error:#}); cleanup also failed"))?;
+        }
+        saved?;
+        Ok(agent)
+    }
+
     async fn configure_agent(
         &self,
         _agent: &Arc<dyn AgentHandle>,
@@ -186,34 +221,7 @@ pub async fn create_agent(
     if slug.trim().is_empty() {
         bail!("saved agent slug must not be empty");
     }
-    let agent = backend
-        .exoharness()
-        .new_agent(NewAgentRequest {
-            vaults: vec![],
-            slug: slug.to_string(),
-            name: name.to_string(),
-        })
-        .await?;
-    let saved: Result<()> = async {
-        backend.configure_agent(&agent, definition).await?;
-        agent
-            .write_artifact(WriteArtifactRequest {
-                path: AGENT_DEFINITION_PATH.to_string(),
-                contents: definition.source.as_bytes().to_vec(),
-            })
-            .await?;
-        Ok(())
-    }
-    .await;
-    if let Err(error) = &saved {
-        backend
-            .exoharness()
-            .delete_agent(&agent.record().id)
-            .await
-            .with_context(|| format!("saving agent failed ({error:#}); cleanup also failed"))?;
-    }
-    saved?;
-    Ok(agent)
+    backend.create_managed_agent(definition, name, slug).await
 }
 
 pub async fn load_definition(agent: &dyn AgentHandle) -> Result<Option<AgentDefinition>> {

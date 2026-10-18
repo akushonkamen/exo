@@ -429,6 +429,21 @@ pub async fn create_agent(
     Ok(agent.record().clone())
 }
 
+pub async fn create_managed_agent(
+    service: &Service<'_>,
+    body: exo_managed_agents::http::protocol::CreateManagedAgentBody,
+) -> Result<exoharness::AgentRecord> {
+    service.require_full_provider()?;
+    let definition =
+        exo_managed_agents::AgentDefinition::parse(body.definition).map_err(bad_request)?;
+    let agent = service
+        .runtime
+        .create_managed_agent(&definition, &body.name, &body.slug)
+        .await
+        .map_err(bad_request)?;
+    Ok(agent.record().clone())
+}
+
 pub async fn get_agent(
     service: &Service<'_>,
     path: &AgentPath,

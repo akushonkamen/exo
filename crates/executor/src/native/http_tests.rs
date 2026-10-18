@@ -1252,3 +1252,108 @@ async fn rejected_agent_update_restores_the_saved_definition() -> Result<()> {
         .await?;
     f.stop().await
 }
+
+#[tokio::test]
+async fn http_managed_agent_creation_uses_one_definition_aware_request() -> Result<()> {
+    use wiremock::{
+        Mock, MockServer, ResponseTemplate,
+        matchers::{method, path},
+    };
+    let source = "---\nharness: basic\nmodel: {name: test-model}\n---\nSaved instructions.";
+    let definition = exo_managed_agents::AgentDefinition::parse(source.into())?;
+    for status in [400, 404] {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/exo/agent/managed"))
+            .respond_with(ResponseTemplate::new(status).set_body_string("definition rejected"))
+            .mount(&server)
+            .await;
+        let provider = HttpProvider::new(RuntimeClient::new(&format!("{}/exo", server.uri()))?);
+        let error = exo_managed_agents::create_agent(&provider, &definition, "Support", "support")
+            .await
+            .err()
+            .context("creation should fail")?;
+        assert!(error.to_string().contains(&status.to_string()), "{error:#}");
+        let requests = server
+            .received_requests()
+            .await
+            .context("received requests")?;
+        assert_eq!(
+            requests.len(),
+            1,
+            "rejection must not register a shell or attempt DELETE"
+        );
+        let body: CreateManagedAgentBody = requests[0].body_json()?;
+        assert_eq!(body.definition, source);
+        assert_eq!(
+            (body.name.as_str(), body.slug.as_str()),
+            ("Support", "support")
+        );
+    }
+    let server = MockServer::start().await;
+    let record = exoharness::AgentRecord {
+        id: exoharness::Uuid7::now(),
+        slug: "support".into(),
+        name: "Support".into(),
+        vaults: vec![],
+    };
+    Mock::given(method("POST"))
+        .and(path("/exo/agent/managed"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(&record))
+        .mount(&server)
+        .await;
+    let provider = HttpProvider::new(RuntimeClient::new(&format!("{}/exo", server.uri()))?);
+    let agent =
+        exo_managed_agents::create_agent(&provider, &definition, "Support", "support").await?;
+    assert_eq!(agent.record(), &record);
+    assert_eq!(
+        server
+            .received_requests()
+            .await
+            .context("received requests")?
+            .len(),
+        1,
+        "Create-only callers must not need an extra Read or Update request"
+    );
+    Ok(())
+}
+
+#[actix_web::test]
+async fn managed_agent_creation_validates_before_reserving_the_slug() -> Result<()> {
+    let f = Fixture::new().await?;
+    let mut body = CreateManagedAgentBody {
+        name: "Support".into(),
+        slug: "support".into(),
+        definition: "invalid frontmatter".into(),
+    };
+    assert!(f.client.create_managed_agent(&body).await.is_err());
+    assert!(
+        !f.runtime
+            .exoharness_handle()
+            .list_agents()
+            .await?
+            .iter()
+            .any(|agent| agent.record().slug == "support")
+    );
+    body.definition =
+        "---\nharness: basic\nmodel: {name: test-model}\n---\nSaved instructions.".into();
+    let agent = f.client.create_managed_agent(&body).await?;
+    assert_eq!(
+        (agent.name.as_str(), agent.slug.as_str()),
+        ("Support", "support")
+    );
+    let saved = f
+        .runtime
+        .exoharness_handle()
+        .get_agent(&agent.id)
+        .await?
+        .context("saved agent")?;
+    assert_eq!(
+        exo_managed_agents::load_definition(saved.as_ref())
+            .await?
+            .context("saved definition")?
+            .source(),
+        body.definition
+    );
+    f.stop().await
+}
