@@ -56,6 +56,36 @@ Notes:
 - For a minimal start without Docker defaults or adapter setup:
   `./examples/self-improving-agent/exo.sh --template minimal --pull-sandbox`
 
+## Install mechanics
+
+Setup (`examples/self-improving-agent/setup.sh`) always does three things:
+it obtains the Exo source (git clone or reuse of an existing checkout), it
+provides the `exo` binary, and it initializes local state (`.env`, vault
+credentials, agent definitions). The source is non-negotiable — Exo edits
+itself at runtime — but the binary does not have to come from a fresh
+`cargo build`.
+
+### Binary-first first run
+
+A from-scratch `cargo build` takes minutes, so the launch path in
+`exo.sh` (`ensure_exo_bin`) and `setup.sh --prebuilt` can bootstrap from an
+existing binary instead:
+
+1. `EXO_PREBUILT_BIN=<path>` — use a local prebuilt binary.
+2. `EXO_PREBUILT_URL=<url>` — download one (hosted binaries are not
+   published yet; point this at your own artifact until they are). Downloads
+   are cached under `.exo-cache/bin/`, keyed by URL, and reused on later
+   runs even without the env var set.
+3. `setup.sh --prebuilt <path-or-url>` — same mechanism, wired into setup so
+   the interactive prompts start in seconds; the source rebuild runs in the
+   background while you answer them.
+
+The bootstrap binary is copied to `target/debug/exo` so every launch path
+uses the same location, and a `cargo build` is started in the background
+(log: `.exo-cache/build.log`, pid: `.exo-cache/build.pid`). Once it finishes,
+the source-built binary replaces the bootstrap. If no prebuilt source is
+available, Exo falls back to building synchronously as before.
+
 ## Self Introspection
 
 Exo starts with sandbox shell support by default. The startup script mounts

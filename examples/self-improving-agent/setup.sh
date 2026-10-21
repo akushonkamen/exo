@@ -11,6 +11,7 @@ AGENT_NAME="${EXO_AGENT_NAME:-Exo}"
 USER_NAME="${EXO_USER_NAME:-}"
 FORCE_INSTALL="${EXO_SETUP_FORCE:-false}"
 INSTALL_DEPS="${EXO_SETUP_INSTALL_DEPS:-false}"
+PREBUILT_SOURCE="${EXO_PREBUILT:-}"
 DOCKER_GROUP_ADDED=false
 SETUP_ARGS=()
 DEFAULT_EXO_CHAT_BASE_URL="https://exoharness.ai"
@@ -39,6 +40,9 @@ Options:
   --force               Back up existing files and install into a non-empty
                         directory; refuses to run directly in $HOME or /
   --install-deps        Install missing dependencies without prompting
+  --prebuilt <src>      Bootstrap from a prebuilt exo binary (local path or
+                        https URL) to skip the first cargo build; Exo still
+                        rebuilds itself from source in the background
   --help                Show this help
 
 Environment overrides:
@@ -64,6 +68,11 @@ parse_args() {
       --install-deps)
         INSTALL_DEPS=true
         shift
+        ;;
+      --prebuilt)
+        PREBUILT_SOURCE="${2:-}"
+        [[ -n "$PREBUILT_SOURCE" ]] || die "$1 requires a path or https URL"
+        shift 2
         ;;
       --help|-h)
         usage
@@ -779,9 +788,35 @@ main() {
   ensure_toolchains
 
   # Build before the interactive prompts so answering them is the last step
-  # before launch.
-  info "Build Exo (takes a few minutes on first install)"
-  ./examples/self-improving-agent/exo.sh build
+  # before launch. With --prebuilt, bootstrap the binary instead so setup
+  # takes seconds; the source rebuild runs in the background while the user
+  # answers the prompts (Exo edits itself, so it always ends up running a
+  # binary built from the source on disk).
+  local resolver="$install_dir/examples/self-improving-agent/scripts/exo-bin-resolver.sh"
+  local bootstrapped=false
+  if [[ -n "$PREBUILT_SOURCE" ]]; then
+    # shellcheck source=scripts/exo-bin-resolver.sh
+    if source "$resolver"; then
+      case "$PREBUILT_SOURCE" in
+        http://*|https://*) export EXO_PREBUILT_URL="$PREBUILT_SOURCE" ;;
+        *) export EXO_PREBUILT_BIN="$PREBUILT_SOURCE" ;;
+      esac
+      export EXO_PREBUILT_CACHE_DIR="${EXO_PREBUILT_CACHE_DIR:-$install_dir/.exo-cache/bin}"
+      if exo_install_prebuilt "$install_dir/target/debug/exo" "$install_dir"; then
+        exo_start_background_rebuild "$install_dir" \
+          "$install_dir/.exo-cache/build.log" \
+          "$install_dir/.exo-cache/build.pid" \
+          -p exo
+        bootstrapped=true
+      else
+        echo "warning: --prebuilt $PREBUILT_SOURCE did not yield a usable binary; building from source instead." >&2
+      fi
+    fi
+  fi
+  if [[ "$bootstrapped" != true ]]; then
+    info "Build Exo (takes a few minutes on first install)"
+    ./examples/self-improving-agent/exo.sh build
+  fi
 
   local env_file="$install_dir/.env"
   if [[ ! -f "$env_file" && -f "$install_dir/.env.example" ]]; then

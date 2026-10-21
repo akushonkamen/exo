@@ -67,6 +67,9 @@ jobs:
       - name: Run validation suite
         run: pnpm check
 
+      - name: Install mechanics tests
+        run: bash examples/self-improving-agent/tests/test-install-mechanics.sh
+
   rust-tests:
     strategy:
       fail-fast: false

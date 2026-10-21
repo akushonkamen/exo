@@ -178,6 +178,18 @@ ensure_exo_bin() {
   if [[ "$EXO_BIN" != "$ROOT_DIR/target/debug/exo" ]]; then
     die "exo binary is not executable: $EXO_BIN"
   fi
+  # Binary-first fast path: bootstrap from a prebuilt/cached binary so the
+  # first run starts in seconds, and rebuild from source in the background
+  # (Exo edits itself, so a source-built binary eventually replaces it).
+  # See examples/self-improving-agent/scripts/exo-bin-resolver.sh.
+  if source "$ROOT_DIR/examples/self-improving-agent/scripts/exo-bin-resolver.sh" &&
+    exo_install_prebuilt "$EXO_BIN" "$ROOT_DIR"; then
+    exo_start_background_rebuild "$ROOT_DIR" \
+      "$ROOT_DIR/.exo-cache/build.log" \
+      "$ROOT_DIR/.exo-cache/build.pid" \
+      -p exo
+    return
+  fi
   build_exo
 }
 
