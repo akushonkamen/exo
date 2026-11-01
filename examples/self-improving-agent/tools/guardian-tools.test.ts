@@ -83,6 +83,7 @@ describe("guardian tools", () => {
     );
 
     writeFailedOutcome(outcomePath, {
+      status: "spawn_failed",
       error: "failed to spawn deferred activation helper (ENOENT)",
     });
 
@@ -91,11 +92,45 @@ describe("guardian tools", () => {
       unknown
     >;
     expect(record.updateId).toBe("u-1");
-    expect(record.status).toBe("failed");
+    expect(record.status).toBe("spawn_failed");
     expect(record.error).toBe(
       "failed to spawn deferred activation helper (ENOENT)",
     );
     expect(typeof record.failedAt).toBe("string");
+  });
+
+  it("keeps spawn_failed and preflight_failed terminal states distinct", () => {
+    const directory = mkdtempSync(join(tmpdir(), "guardian-outcome-"));
+    temporaryDirectories.push(directory);
+    const spawnPath = join(directory, "spawn.json");
+    const preflightPath = join(directory, "preflight.json");
+
+    writeFailedOutcome(spawnPath, {
+      status: "spawn_failed",
+      error: "helper missing",
+    });
+    writeFailedOutcome(preflightPath, {
+      status: "preflight_failed",
+      error: "activation preflight [pnpm-lint] failed (exit 7)",
+      preflight: {
+        status: "preflight_failed",
+        checks: [{ name: "pnpm-lint", status: "failed", exitCode: 7 }],
+      },
+    });
+
+    const spawnRecord = JSON.parse(readFileSync(spawnPath, "utf8")) as Record<
+      string,
+      unknown
+    >;
+    const preflightRecord = JSON.parse(
+      readFileSync(preflightPath, "utf8"),
+    ) as Record<string, unknown>;
+    expect(spawnRecord.status).toBe("spawn_failed");
+    expect(preflightRecord.status).toBe("preflight_failed");
+    // The per-check report survives so the next attempt can inspect it.
+    expect(
+      (preflightRecord.preflight as Record<string, unknown>).checks,
+    ).toHaveLength(1);
   });
 
   it("records a terminal failed outcome even without a queued record", () => {

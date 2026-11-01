@@ -114,6 +114,7 @@ function queueRebuildAndRestart(
     // Fail closed: record a terminal outcome instead of leaving the update
     // queued forever when the deferred runner cannot be launched.
     writeFailedOutcome(outcomePath, {
+      status: "spawn_failed",
       error: `deferred activation helper missing: ${missingScript}`,
     });
     throw new Error(
@@ -185,7 +186,7 @@ function runGuardianDeferredWithOutcome(
     } catch {
       // The outcome file below is the durable record; the log is best-effort.
     }
-    writeFailedOutcome(outcomePath, { error: message });
+    writeFailedOutcome(outcomePath, { status: "spawn_failed", error: message });
   });
   child.unref();
   closeSync(logFd);
@@ -198,7 +199,7 @@ function runGuardianDeferredWithOutcome(
 
 export function writeFailedOutcome(
   outcomePath: string,
-  extra: JsonObject,
+  extra: JsonObject & { status?: string },
 ): void {
   let record: JsonObject = {};
   try {
@@ -208,7 +209,11 @@ export function writeFailedOutcome(
   }
   writeJsonAtomically(outcomePath, {
     ...record,
-    status: "failed",
+    // Terminal states stay distinct: "spawn_failed" (the deferred runner
+    // never launched) vs "preflight_failed" (the guardian rejected the
+    // candidate; written by the deferred runner from the guardian's exit
+    // code). They have different remedies and different audit meanings.
+    status: extra.status ?? "failed",
     failedAt: new Date().toISOString(),
     ...extra,
   });
